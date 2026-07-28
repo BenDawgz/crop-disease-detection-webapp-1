@@ -91,12 +91,12 @@ CONFIDENCE_THRESHOLD = 0.40  # 40%
 
 NEW_CLASS_NAMES = [
     "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot",
-    "Corn_(maize)__Common_rust",
+    "Corn_(maize)___Common_rust_",
     "Corn_(maize)___Northern_Leaf_Blight",
     "Corn_(maize)___healthy",
     "Grape___Black_rot",
-    "Grape__Esca(Black_Measles)",
-    "Grape__Leaf_blight(Isariopsis_Leaf_Spot)",
+    "Grape___Esca_(Black_Measles)",
+    "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)",
     "Grape___healthy",
     "Tomato___Bacterial_spot",
     "Tomato___Early_blight",
@@ -105,18 +105,17 @@ NEW_CLASS_NAMES = [
     "Tomato___Septoria_leaf_spot",
     "Tomato___Spider_mites Two-spotted_spider_mite",
     "Tomato___Target_Spot",
-    "Tomato___Tomato_mosaic_virus",
-    "Tomato___healthy"
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus"
 ]
 
 TREATMENT_DICT = {
     "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot": "Use fungicides like mancozeb and rotate crops.",
-    "Corn_(maize)__Common_rust": "Apply fungicides at early infection stage and plant resistant varieties.",
+    "Corn_(maize)___Common_rust_": "Apply fungicides at early infection stage and plant resistant varieties.",
     "Corn_(maize)___Northern_Leaf_Blight": "Use resistant hybrids and apply fungicides.",
     "Corn_(maize)___healthy": "No disease detected. Continue good practices.",
     "Grape___Black_rot": "Remove infected fruits, prune vines, and apply fungicides.",
-    "Grape__Esca(Black_Measles)": "Prune infected wood and avoid water stress.",
-    "Grape__Leaf_blight(Isariopsis_Leaf_Spot)": "Apply fungicides and prune infected leaves.",
+    "Grape___Esca_(Black_Measles)": "Prune infected wood and avoid water stress.",
+    "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)": "Apply fungicides and prune infected leaves.",
     "Grape___healthy": "No disease detected. Maintain good vineyard hygiene.",
     "Tomato___Bacterial_spot": "Use copper-based sprays and remove infected leaves.",
     "Tomato___Early_blight": "Apply fungicides and rotate crops annually.",
@@ -125,8 +124,7 @@ TREATMENT_DICT = {
     "Tomato___Septoria_leaf_spot": "Remove affected leaves and use fungicides.",
     "Tomato___Spider_mites Two-spotted_spider_mite": "Use miticides or neem oil.",
     "Tomato___Target_Spot": "Apply fungicides and ensure proper plant spacing.",
-    "Tomato___Tomato_mosaic_virus": "Remove infected plants and disinfect tools.",
-    "Tomato___healthy": "No disease detected. Maintain healthy practices."
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus": "Use insecticides to control whiteflies, remove infected plants, and use resistant varieties."
 }
 
 def _infer_model_img_size(model, fallback=(224, 224)):
