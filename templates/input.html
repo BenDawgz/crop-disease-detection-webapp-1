@@ -1,17 +1,15 @@
-{% extends 'base.html' %} {% block title %}Crop Disease{% endblock title %} {%
+{% extends 'base.html' %} {% block title %}BID CROP DETECTOR{% endblock title %} {%
 block body %}
 <style>
   :root {
     --bg: #f5fbf6;
     --card: #ffffff;
-    --accent-1: #000000; /* primary green */
-    --accent-2: #000000; /* darker */
-    --muted: #000000;
-    --glass: rgba(255, 255, 255, 0.7);
+    --accent-1: #2c5f2d;
+    --accent-2: #1a3d1b;
+    --muted: #5a6b5a;
     --shadow-sm: 0 8px 30px rgba(8, 28, 18, 0.06);
   }
 
-  /* page shell */
   .shell {
     min-height: 72vh;
     display: flex;
@@ -23,7 +21,6 @@ block body %}
     color: #06121a;
   }
 
-  /* card */
   .card {
     width: 100%;
     max-width: 1040px;
@@ -40,7 +37,6 @@ block body %}
     }
   }
 
-  /* left visual */
   .visual {
     padding: 20px;
     display: flex;
@@ -52,145 +48,96 @@ block body %}
       rgba(250, 250, 255, 0.7)
     );
     position: relative;
-  }
-  .live-badge {
-    position: absolute;
-    left: 20px;
-    top: 18px;
-    background: linear-gradient(90deg, #ff6b6b, #ff3b3b);
-    color: white;
-    padding: 7px 12px;
-    border-radius: 999px;
-    font-weight: 800;
-    font-size: 0.85rem;
-    box-shadow: 0 8px 30px rgba(255, 70, 70, 0.12);
-  }
-  .frame {
-    width: 100%;
-    max-width: 760px;
-    border-radius: 12px;
-    overflow: hidden;
-    border: 6px solid rgba(255, 255, 255, 0.55);
-    box-shadow: 0 12px 40px rgba(6, 24, 10, 0.06);
-    transition: transform 0.36s cubic-bezier(0.2, 0.9, 0.2, 1);
-    background: #000;
-  }
-  .frame img {
-    display: block;
-    width: 100%;
-    height: auto;
-    object-fit: cover;
-  }
-  .frame:hover {
-    transform: scale(1.01);
-    filter: saturate(1.04);
+    min-height: 380px;
   }
 
-  /* right controls */
+  .drop-zone {
+    width: 100%;
+    max-width: 760px;
+    min-height: 340px;
+    border-radius: 12px;
+    border: 3px dashed rgba(44, 95, 45, 0.3);
+    background: linear-gradient(180deg, rgba(245, 255, 250, 0.5), rgba(255, 255, 255, 0.8));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    padding: 30px;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent-1);
+    background: rgba(44, 95, 45, 0.05);
+    transform: scale(1.01);
+  }
+  .drop-zone.has-image {
+    border: 3px solid var(--accent-1);
+    padding: 8px;
+  }
+  .drop-zone img {
+    max-width: 100%;
+    max-height: 400px;
+    border-radius: 8px;
+    object-fit: contain;
+  }
+
+  .drop-icon { font-size: 48px; opacity: 0.6; }
+  .drop-text { font-size: 1.1rem; font-weight: 600; color: var(--muted); }
+  .drop-hint { font-size: 0.85rem; color: #999; }
+
   .controls {
     padding: 22px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 14px;
     justify-content: center;
   }
-  .title {
-    font-size: 1.15rem;
-    font-weight: 800;
-    margin: 0;
-  }
-  .subtitle {
-    margin: 0;
-    color: var(--muted);
-    font-size: 0.95rem;
-  }
+  .title { font-size: 1.15rem; font-weight: 800; margin: 0; }
+  .subtitle { margin: 0; color: var(--muted); font-size: 0.95rem; }
 
-  /* Buttons: new tactile styles */
   .btn {
     display: inline-flex;
     align-items: center;
     gap: 10px;
     border-radius: 999px;
-    padding: 12px 16px;
+    padding: 14px 24px;
     font-weight: 800;
     cursor: pointer;
     user-select: none;
     border: none;
-    position: relative;
-    overflow: visible;
     transition: transform 0.14s ease, box-shadow 0.14s ease;
-    -webkit-tap-highlight-color: transparent;
+    font-size: 1rem;
   }
-  .btn:active {
-    transform: translateY(1px);
-  }
+  .btn:active { transform: translateY(1px); }
 
-  /* Primary button: glossy, elevated, ripple */
   .btn-primary {
     background: linear-gradient(180deg, var(--accent-1), var(--accent-2));
     color: #fff;
-    box-shadow: 0 14px 34px rgba(16, 128, 76, 0.18),
-      inset 0 -6px 14px rgba(0, 0, 0, 0.06);
-    padding-left: 18px;
-    padding-right: 18px;
+    box-shadow: 0 14px 34px rgba(16, 128, 76, 0.18);
+    width: 100%;
+    justify-content: center;
   }
-  .btn-primary:focus {
-    outline: 3px solid rgba(23, 179, 90, 0.18);
-    outline-offset: 3px;
+  .btn-primary:hover {
+    box-shadow: 0 16px 40px rgba(16, 128, 76, 0.28);
+    transform: translateY(-1px);
   }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
-  /* Ghost secondary */
-  .btn-ghost {
+  .btn-outline {
     background: transparent;
-    color: #06121a;
-    border: 1px solid rgba(6, 18, 26, 0.06);
-    padding: 10px 14px;
-    box-shadow: none;
+    color: var(--accent-1);
+    border: 2px solid var(--accent-1);
+    width: 100%;
+    justify-content: center;
   }
-  .btn-ghost:focus {
-    outline: 3px solid rgba(6, 18, 26, 0.06);
-    outline-offset: 3px;
-  }
+  .btn-outline:hover { background: rgba(44, 95, 45, 0.05); }
 
-  /* Icon circle */
-  .icon-circle {
-    width: 36px;
-    height: 36px;
-    border-radius: 999px;
-    display: inline-grid;
-    place-items: center;
-    background: rgba(255, 255, 255, 0.12);
-    box-shadow: 0 6px 18px rgba(9, 18, 12, 0.06);
-  }
+  .file-info { font-size: 0.9rem; color: var(--muted); text-align: center; min-height: 20px; }
 
-  /* File picker (drop friendly) */
-  .file-drop {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-  }
-  .file-chooser {
-    padding: 10px 12px;
-    border-radius: 10px;
-    border: 1px dashed rgba(8, 18, 12, 0.06);
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.7),
-      rgba(250, 250, 250, 0.7)
-    );
-    cursor: pointer;
-    font-weight: 700;
-  }
-  .file-name {
-    font-size: 0.92rem;
-    color: var(--muted);
-    max-width: 160px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  .hint { color: var(--muted); font-size: 0.88rem; margin-top: 4px; line-height: 1.5; }
 
-  /* flash/toast */
   .toast {
     padding: 10px 14px;
     border-radius: 10px;
@@ -202,187 +149,81 @@ block body %}
     gap: 8px;
     align-items: center;
   }
-  .toast .close {
-    margin-left: 8px;
-    cursor: pointer;
-    opacity: 0.6;
-    font-weight: 900;
-  }
+  .toast .close { margin-left: 8px; cursor: pointer; opacity: 0.6; font-weight: 900; }
 
-  /* tiny helper */
-  .hint {
-    color: var(--muted);
-    font-size: 0.92rem;
-    margin-top: 6px;
-  }
-
-  /* ripple element */
-  .ripple {
-    position: absolute;
-    border-radius: 50%;
-    transform: scale(0);
-    pointer-events: none;
-    opacity: 0.6;
-    background: rgba(255, 255, 255, 0.35);
-    animation: ripple 0.6s linear;
-  }
-  @keyframes ripple {
-    to {
-      transform: scale(4);
-      opacity: 0;
-    }
+  .supported-crops { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  .crop-tag {
+    background: rgba(44, 95, 45, 0.08);
+    color: var(--accent-2);
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
   }
 </style>
 
-<section class="shell" aria-label="Crop capture area">
+<section class="shell" aria-label="Upload crop image">
   <div class="card" role="region" aria-live="polite">
-    <!-- LEFT: visual -->
+    <!-- LEFT: Drop zone -->
     <div class="visual">
-      <div class="live-badge">● LIVE</div>
-
-      <div class="frame" aria-hidden="false">
-        {% if uploaded_image_url %}
-        <img
-          src="{{ uploaded_image_url }}"
-          alt="Uploaded preview"
-          loading="eager"
-        />
-        {% else %}
-        <img
-          src="{{ url_for('video') }}"
-          id="video_stream"
-          alt="Live camera feed"
-          loading="eager"
-        />
-        {% endif %}
+      <div class="drop-zone" id="dropZone" onclick="document.getElementById('file_input').click()">
+        <div id="placeholder" style="text-align: center">
+          <div class="drop-icon">🌿</div>
+          <div class="drop-text">Drop your crop image here</div>
+          <div class="drop-hint">or click to browse files</div>
+          <div class="drop-hint" style="margin-top: 8px">Supports: PNG, JPG, JPEG, GIF</div>
+        </div>
+        <img id="preview" style="display: none" alt="Preview of selected image" />
       </div>
     </div>
 
-    <!-- RIGHT: controls -->
+    <!-- RIGHT: Controls -->
     <div class="controls">
       <div>
-        <h3 class="title">Crop Disease — Capture or Upload</h3>
+        <h3 class="title">🔬 BID CROP DETECTOR</h3>
         <p class="subtitle">
-          Snap a close-up of the affected leaf or upload a photo. Fast inference
-          — clear results.
+          Upload a close-up photo of a crop leaf to detect diseases instantly with AI.
         </p>
       </div>
 
-      <div
-        style="
-          display: flex;
-          gap: 12px;
-          align-items: center;
-          margin-top: 12px;
-          flex-wrap: wrap;
-        "
-      >
-        <!-- CAPTURE (primary tactile button) -->
-        <form
-          method="post"
-          action="{{ url_for('tasks') }}"
-          style="display: inline"
-        >
-          <button
-            type="submit"
-            name="click"
-            class="btn btn-primary"
-            aria-label="Capture image"
-            onpointerdown="createRipple(event, this)"
-          >
-            <span class="icon-circle" aria-hidden>
-              <!-- camera SVG -->
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path
-                  d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3l2-3h6l2 3h3a2 2 0 0 1 2 2z"
-                />
-                <circle cx="12" cy="13" r="4" />
-              </svg>
-            </span>
-            <span>Capture</span>
-          </button>
-        </form>
+      <form method="POST" action="/upload" enctype="multipart/form-data" id="uploadForm">
+        <input id="file_input" name="file" type="file" accept="image/*" style="display: none" required />
+        <div class="file-info" id="fileName">No file selected</div>
+        <button type="submit" class="btn btn-primary" id="uploadBtn" disabled>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 5 17 10" />
+            <line x1="12" y1="5" x2="12" y2="19" />
+          </svg>
+          Analyze Crop
+        </button>
+      </form>
 
-        <!-- UPLOAD file chooser and submit -->
-        <form
-          method="POST"
-          action="/upload"
-          enctype="multipart/form-data"
-          style="display: flex; gap: 8px; align-items: center"
-        >
-          <label
-            class="file-chooser"
-            for="file_input"
-            title="Select image (or drag & drop)"
-          >
-            📁 Choose file
-          </label>
-          <input
-            id="file_input"
-            name="file"
-            type="file"
-            accept="image/*"
-            style="display: none"
-            required
-          />
-          <span class="file-name" id="fileName">No file chosen</span>
+      <button class="btn btn-outline" onclick="document.getElementById('file_input').click()">
+        📁 Choose Another File
+      </button>
 
-          <button
-            type="submit"
-            class="btn btn-ghost"
-            aria-label="Upload image"
-            onpointerdown="createRipple(event, this)"
-          >
-            <span style="display: inline-flex; align-items: center; gap: 8px">
-              <!-- upload icon -->
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 5 17 10" />
-                <line x1="12" y1="5" x2="12" y2="19" />
-              </svg>
-              Upload
-            </span>
-          </button>
-        </form>
-      </div>
-
-      <!-- drag & drop hint -->
       <div class="hint">
-        Tip: For best results, get within ~20–30cm of the affected area and
-        avoid motion blur.
+        <strong>Supported crops:</strong>
+        <div class="supported-crops">
+          <span class="crop-tag">🌽 Corn</span>
+          <span class="crop-tag">🍇 Grape</span>
+          <span class="crop-tag">🍅 Tomato</span>
+        </div>
       </div>
 
-      <!-- flash toasts -->
-      <div style="margin-top: 10px">
+      <div class="hint">
+        💡 Tip: For best results, photograph a single leaf up close (~20-30cm) with good lighting.
+      </div>
+
+      <!-- Flash messages -->
+      <div style="margin-top: 6px">
         <div id="toastContainer" aria-live="polite">
-          {% with messages = get_flashed_messages() %} {% if messages %} {% for
-          message in messages %}
+          {% with messages = get_flashed_messages() %} {% if messages %} {% for message in messages %}
           <div class="toast" role="status">
             <div>{{ message }}</div>
-            <div
-              class="close"
-              onclick="this.parentElement.style.display='none'"
-            >
-              ×
-            </div>
+            <div class="close" onclick="this.parentElement.style.display='none'">×</div>
           </div>
           {% endfor %} {% endif %} {% endwith %}
         </div>
@@ -392,62 +233,50 @@ block body %}
 </section>
 
 <script>
-  // ripple creation on buttons
-  function createRipple(e, el) {
-    const rect = el.getBoundingClientRect();
-    const d = Math.max(rect.width, rect.height);
-    const ripple = document.createElement("span");
-    ripple.className = "ripple";
-    ripple.style.width = ripple.style.height = d + "px";
-    ripple.style.left = e.clientX - rect.left - d / 2 + "px";
-    ripple.style.top = e.clientY - rect.top - d / 2 + "px";
-    el.appendChild(ripple);
-    setTimeout(() => ripple.remove(), 650);
-  }
-
-  // file input name display + simple drag & drop
   (function () {
     const fileInput = document.getElementById("file_input");
     const fileName = document.getElementById("fileName");
-    const frame = document.querySelector(".frame");
+    const dropZone = document.getElementById("dropZone");
+    const preview = document.getElementById("preview");
+    const placeholder = document.getElementById("placeholder");
+    const uploadBtn = document.getElementById("uploadBtn");
 
-    if (fileInput) {
-      fileInput.addEventListener("change", (ev) => {
-        const f = ev.target.files && ev.target.files[0];
-        fileName.textContent = f ? f.name : "No file chosen";
-      });
+    function handleFile(file) {
+      if (!file) return;
+      fileName.textContent = file.name;
+      uploadBtn.disabled = false;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        preview.src = e.target.result;
+        preview.style.display = "block";
+        placeholder.style.display = "none";
+        dropZone.classList.add("has-image");
+      };
+      reader.readAsDataURL(file);
     }
 
-    // basic drag-drop to file input for the frame
+    fileInput.addEventListener("change", (ev) => {
+      handleFile(ev.target.files && ev.target.files[0]);
+    });
+
     ["dragenter", "dragover"].forEach((evt) => {
-      frame.addEventListener(evt, (e) => {
-        e.preventDefault();
-        frame.style.opacity = "0.95";
-      });
+      dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
     });
     ["dragleave", "drop"].forEach((evt) => {
-      frame.addEventListener(evt, (e) => {
-        e.preventDefault();
-        frame.style.opacity = "1";
-      });
+      dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.remove("drag-over"); });
     });
-    frame.addEventListener("drop", (e) => {
+    dropZone.addEventListener("drop", (e) => {
       const dt = e.dataTransfer;
       if (!dt || !dt.files || dt.files.length === 0) return;
       const file = dt.files[0];
-      // set file into input (works in modern browsers)
-      if (fileInput) {
-        const dataTransfer = new DataTransfer();
-        dataTransfer.items.add(file);
-        fileInput.files = dataTransfer.files;
-        fileName.textContent = file.name;
-      }
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      fileInput.files = dataTransfer.files;
+      handleFile(file);
     });
 
-    // auto-hide toasts
     window.addEventListener("load", () => {
-      const toasts = document.querySelectorAll("#toastContainer .toast");
-      toasts.forEach((t) => {
+      document.querySelectorAll("#toastContainer .toast").forEach((t) => {
         setTimeout(() => {
           t.style.transition = "opacity .4s ease, transform .4s ease";
           t.style.opacity = "0";
