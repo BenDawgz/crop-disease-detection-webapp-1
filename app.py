@@ -164,6 +164,50 @@ def _safe_softmax(x):
         return tf.nn.softmax(x).numpy()
     return x
 
+def is_leaf_image(image_path, min_plant_ratio=0.08):
+    """
+    Check if an image likely contains a plant/leaf by analyzing color distribution.
+    Uses HSV color space to detect green, yellow-green, and brown (diseased leaf) hues.
+    Returns (is_leaf: bool, reason: str)
+    """
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            return False, "Could not read the image file."
+
+        # Resize for faster processing
+        h, w = img.shape[:2]
+        if max(h, w) > 512:
+            scale = 512 / max(h, w)
+            img = cv2.resize(img, (int(w * scale), int(h * scale)))
+
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        total_pixels = hsv.shape[0] * hsv.shape[1]
+
+        # Define plant-like color ranges in HSV
+        # Green hues (healthy leaves): H=25-90
+        green_mask = cv2.inRange(hsv, (25, 30, 30), (90, 255, 255))
+        # Yellow-brown hues (diseased/dying leaves): H=10-25
+        yellow_brown_mask = cv2.inRange(hsv, (10, 30, 30), (25, 255, 255))
+        # Dark brown/necrotic (severely diseased): H=0-10 with low-mid saturation
+        brown_mask = cv2.inRange(hsv, (0, 20, 20), (10, 200, 180))
+
+        # Combine all plant-related colors
+        plant_mask = green_mask | yellow_brown_mask | brown_mask
+        plant_pixels = cv2.countNonZero(plant_mask)
+        plant_ratio = plant_pixels / total_pixels
+
+        if plant_ratio >= min_plant_ratio:
+            return True, f"Plant content detected ({plant_ratio:.0%})."
+
+        return False, (
+            "This doesn't appear to be a leaf image. "
+            "Please upload a clear photo of a crop leaf (corn, grape, or tomato)."
+        )
+    except Exception as e:
+        # If validation fails, allow the image through (fail-open)
+        return True, f"Validation skipped: {e}"
+
 def processing(fname):
     global MODEL
     if MODEL is None:
@@ -173,7 +217,12 @@ def processing(fname):
     if not os.path.exists(image_path):
         return "No image", 0.0, None
 
-    # Use the model's expected size (fixes the 36864 vs 50176 mismatch)
+    # Step 1: Check if the image looks like a leaf
+    is_leaf, reason = is_leaf_image(image_path)
+    if not is_leaf:
+        return reason, 0.0, None
+
+    # Step 2: Run the model
     img = tf.keras.preprocessing.image.load_img(image_path, target_size=MODEL_IMG_SIZE)
     input_arr = tf.keras.preprocessing.image.img_to_array(img)
     input_arr = np.expand_dims(input_arr, axis=0).astype("float32") / 255.0
