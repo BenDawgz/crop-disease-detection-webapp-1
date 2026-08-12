@@ -61,7 +61,9 @@ def input():
 
 @app.route('/video')
 def video():
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    if camera is None:
+        # Return a 1x1 transparent pixel instead of hanging
+        return Response(b'', status=204)
 
 @app.route('/requests', methods=['POST', 'GET'])
 def tasks():
