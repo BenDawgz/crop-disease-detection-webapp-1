@@ -12,6 +12,7 @@ numpy>=1.22.2
 opencv-contrib-python-headless>=4.5.5.62
 h5py>=3.0.0
 Pillow>=9.0.0
+scipy>=1.10.0
 
 # Utilities
 requests>=2.27.1
