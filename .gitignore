@@ -1,10 +1,12 @@
 venv/
+.venv311/
 __pycache__/
 *.pyc
 .env
 .DS_Store
 
 # Unused model files (only best_model.h5 is used by the app)
+final_model.h5
 best_model_cont.h5
 final_model_after_resume.h5
 model_0.h5

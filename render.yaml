@@ -4,7 +4,10 @@ services:
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile
+    healthCheckPath: /
     gitLfsEnabled: true
     envVars:
       - key: RENDER
         value: "true"
+      - key: SECRET_KEY
+        generateValue: true

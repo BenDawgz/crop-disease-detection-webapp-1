@@ -1,55 +1,67 @@
 import tensorflow as tf
-from flask import Flask, render_template, request, Response, flash, redirect
+from flask import Flask, render_template, request, Response, flash, redirect, session, url_for
 import cv2
+import json
 import os
+from pathlib import Path
+from uuid import uuid4
 from werkzeug.utils import secure_filename
-from random import randint
 from tensorflow.keras.models import load_model
 import numpy as np
 
 # Globals
-global capture, switch, filename
-capture = 0
+global switch
 switch = 0
-filename = ""
 
 # Flask App Setup
 app = Flask(__name__)
-UPLOAD_FOLDER = 'static/shots'
-app.secret_key = 'cropdisease'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_FOLDER = BASE_DIR / 'static' / 'shots'
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-cropdisease-change-me')
+app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+ENABLE_CAMERA = os.environ.get('ENABLE_CAMERA', '').lower() in {'1', 'true', 'yes', 'on'}
 
 # Ensure shots folder exists
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 
-# Camera - only initialize if not in production (Render has no webcam)
-# Camera disabled
+# Camera is disabled by default because hosted environments usually have no webcam.
 camera = None
-
-# Random name for captured image
-variable_name = str(randint(0, 100))
-size = len(variable_name)
 
 def allowed_file(fname):
     return '.' in fname and fname.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def unique_upload_name(original_name):
+    safe_name = secure_filename(original_name)
+    suffix = Path(safe_name).suffix.lower()
+    stem = Path(safe_name).stem[:50] or 'upload'
+    return f"{uuid4().hex}_{stem}{suffix}"
+
+def upload_path(fname):
+    safe_name = secure_filename(fname or '')
+    if not safe_name or safe_name != fname:
+        return None
+    path = UPLOAD_FOLDER / safe_name
+    try:
+        path.resolve().relative_to(UPLOAD_FOLDER.resolve())
+    except ValueError:
+        return None
+    return path
+
 def generate_frames():
-    global capture
     if camera is None:
         return
     while True:
         success, frame = camera.read()
-        if success:
-            if capture:
-                capture = 0
-                p = os.path.sep.join([UPLOAD_FOLDER, f"{variable_name}.png"])
-                cv2.imwrite(p, frame)
-            ret, buffer = cv2.imencode('.jpg', cv2.flip(frame, 1))
-            frame = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        if not success:
+            break
+        ret, buffer = cv2.imencode('.jpg', cv2.flip(frame, 1))
+        if not ret:
+            continue
+        frame = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
 @app.route('/')
 def index():
@@ -62,17 +74,28 @@ def input():
 @app.route('/video')
 def video():
     if camera is None:
-        # Return a 1x1 transparent pixel instead of hanging
         return Response(b'', status=204)
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/requests', methods=['POST', 'GET'])
 def tasks():
-    global switch, camera, capture
+    global switch, camera
+    if not ENABLE_CAMERA:
+        flash("Camera capture is disabled. Please upload an image instead.")
+        return redirect('/input')
+
     if request.method == 'POST':
         if request.form.get('click') == 'Capture Image':
-            capture = 1
-            # After capture, jump to display using the camera file
-            return redirect("/upload")  # handled as GET below
+            if camera is None:
+                camera = cv2.VideoCapture(0)
+            success, frame = camera.read()
+            if not success:
+                flash("Could not capture an image from the camera.")
+                return redirect('/input')
+            captured_name = f"camera_{uuid4().hex}.png"
+            cv2.imwrite(str(UPLOAD_FOLDER / captured_name), frame)
+            session['last_filename'] = captured_name
+            return redirect(url_for('display_image', filename=captured_name))
         elif request.form.get('stop') == 'Stop/Start':
             if switch == 1:
                 switch = 0
@@ -82,16 +105,16 @@ def tasks():
             else:
                 camera = cv2.VideoCapture(0)
                 switch = 1
-        return redirect("/upload")
-    return render_template('display.html')
+        return redirect('/input')
+    return redirect('/input')
 
 # ------------------------------
 # Model and Classes
 # ------------------------------
-MODEL_PATH = "best_model.h5"
+MODEL_PATH = os.environ.get("MODEL_PATH", str(BASE_DIR / "best_model.h5"))
 CONFIDENCE_THRESHOLD = 0.40  # 40%
 
-NEW_CLASS_NAMES = [
+DEFAULT_CLASS_NAMES = [
     "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot",
     "Corn_(maize)___Common_rust_",
     "Corn_(maize)___Northern_Leaf_Blight",
@@ -109,6 +132,34 @@ NEW_CLASS_NAMES = [
     "Tomato___Target_Spot",
     "Tomato___Tomato_Yellow_Leaf_Curl_Virus"
 ]
+
+def load_class_names():
+    candidates = [
+        os.environ.get("CLASS_INDICES_PATH"),
+        BASE_DIR / "class_indices.json",
+        BASE_DIR / "Main_folder" / "class_indices.json",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if not path.exists():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                class_indices = json.load(f)
+            if isinstance(class_indices, dict) and class_indices:
+                return [
+                    name for name, _ in sorted(
+                        class_indices.items(),
+                        key=lambda item: int(item[1])
+                    )
+                ]
+        except Exception as e:
+            print(f"Could not load class indices from {path}: {e}")
+    return DEFAULT_CLASS_NAMES
+
+CLASS_NAMES = load_class_names()
 
 TREATMENT_DICT = {
     "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot": "Use fungicides like mancozeb and rotate crops.",
@@ -171,7 +222,7 @@ def is_leaf_image(image_path, min_plant_ratio=0.08):
     Returns (is_leaf: bool, reason: str)
     """
     try:
-        img = cv2.imread(image_path)
+        img = cv2.imread(str(image_path))
         if img is None:
             return False, "Could not read the image file."
 
@@ -213,8 +264,8 @@ def processing(fname):
     if MODEL is None:
         return "Model not loaded", 0.0, None
 
-    image_path = os.path.join(UPLOAD_FOLDER, fname)
-    if not os.path.exists(image_path):
+    image_path = upload_path(fname)
+    if image_path is None or not image_path.exists():
         return "No image", 0.0, None
 
     # Step 1: Check if the image looks like a leaf
@@ -223,16 +274,19 @@ def processing(fname):
         return reason, 0.0, None
 
     # Step 2: Run the model
-    img = tf.keras.preprocessing.image.load_img(image_path, target_size=MODEL_IMG_SIZE)
-    input_arr = tf.keras.preprocessing.image.img_to_array(img)
-    input_arr = np.expand_dims(input_arr, axis=0).astype("float32") / 255.0
+    try:
+        img = tf.keras.preprocessing.image.load_img(str(image_path), target_size=MODEL_IMG_SIZE)
+        input_arr = tf.keras.preprocessing.image.img_to_array(img)
+        input_arr = np.expand_dims(input_arr, axis=0).astype("float32") / 255.0
 
-    preds = MODEL.predict(input_arr)
-    scores = preds[0]
-    probs = _safe_softmax(scores)
-    idx = int(np.argmax(probs))
-    label = NEW_CLASS_NAMES[idx] if idx < len(NEW_CLASS_NAMES) else f"Class {idx}"
-    confidence = float(probs[idx]) * 100.0
+        preds = MODEL.predict(input_arr)
+        scores = preds[0]
+        probs = _safe_softmax(scores)
+        idx = int(np.argmax(probs))
+        label = CLASS_NAMES[idx] if idx < len(CLASS_NAMES) else f"Class {idx}"
+        confidence = float(probs[idx]) * 100.0
+    except Exception as e:
+        return f"Could not process image: {e}", 0.0, None
 
     if confidence < (CONFIDENCE_THRESHOLD * 100.0):
         return "Uncertain - Image may not be a crop leaf", confidence, None
@@ -240,29 +294,31 @@ def processing(fname):
     treatment = TREATMENT_DICT.get(label, "No treatment info available")
     return label, round(confidence, 2), treatment
 
+def render_result(fname):
+    image_path = upload_path(fname)
+    if image_path is None or not image_path.exists():
+        flash("No image to display.")
+        return redirect('/input')
+    label, confidence, treatment = processing(fname)
+    return render_template('display.html',
+                           variable_name=fname,
+                           label=label,
+                           confidence=confidence,
+                           treatment=treatment)
+
 # ---------- Upload / Display ----------
 @app.route('/upload', methods=['GET', 'POST'])
 def upload():
     """
-    GET  -> show last camera capture (variable_name.png) if present
+    GET  -> show the last image from this browser session
     POST -> handle file upload
     """
-    global filename
 
     if request.method == 'GET':
-        # Camera path
-        cam_file = f"{variable_name}.png"
-        cam_path = os.path.join(app.config['UPLOAD_FOLDER'], cam_file)
-        if os.path.exists(cam_path):
-            filename = cam_file
-            label, confidence, treatment = processing(filename)
-            return render_template('display.html',
-                                   variable_name=filename,
-                                   label=label,
-                                   confidence=confidence,
-                                   treatment=treatment)
-        # no camera file -> back to input
-        flash("No captured image found. Please upload an image.")
+        fname = session.get('last_filename')
+        if fname:
+            return render_result(fname)
+        flash("No uploaded image found. Please upload an image.")
         return redirect('/input')
 
     # POST (file upload)
@@ -274,32 +330,25 @@ def upload():
         flash("No image selected for uploading")
         return redirect(request.url)
     if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        filename = unique_upload_name(file.filename)
+        save_path = UPLOAD_FOLDER / filename
         file.save(save_path)
+        session['last_filename'] = filename
         flash("Image successfully uploaded.")
-        label, confidence, treatment = processing(filename)
-        return render_template('display.html',
-                               variable_name=filename,
-                               label=label,
-                               confidence=confidence,
-                               treatment=treatment)
+        return redirect(url_for('display_image', filename=filename))
     else:
         flash("Allowed image types are - png, jpg, jpeg, gif.")
         return redirect('/input')
 
 @app.route('/display')
 def display_image():
-    # Use the last known filename
-    if not filename:
-        flash("No image to display.")
-        return redirect('/input')
-    label, confidence, treatment = processing(filename)
-    return render_template('display.html',
-                           variable_name=filename,
-                           label=label,
-                           confidence=confidence,
-                           treatment=treatment)
+    filename = request.args.get('filename') or session.get('last_filename')
+    if filename:
+        session['last_filename'] = filename
+        return render_result(filename)
+    flash("No image to display.")
+    return redirect('/input')
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    debug = os.environ.get('FLASK_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}
+    app.run(debug=debug)

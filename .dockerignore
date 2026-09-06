@@ -1,4 +1,5 @@
 venv/
+.venv311/
 __pycache__/
 .git/
 .gitattributes
@@ -7,6 +8,7 @@ __pycache__/
 Dockerfile
 
 # Unused model files (only best_model.h5 is needed)
+final_model.h5
 best_model_cont.h5
 final_model_after_resume.h5
 model_0.h5

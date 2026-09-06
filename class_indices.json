@@ -1,0 +1,18 @@
+{
+    "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot": 0,
+    "Corn_(maize)___Common_rust_": 1,
+    "Corn_(maize)___Northern_Leaf_Blight": 2,
+    "Corn_(maize)___healthy": 3,
+    "Grape___Black_rot": 4,
+    "Grape___Esca_(Black_Measles)": 5,
+    "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)": 6,
+    "Grape___healthy": 7,
+    "Tomato___Bacterial_spot": 8,
+    "Tomato___Early_blight": 9,
+    "Tomato___Late_blight": 10,
+    "Tomato___Leaf_Mold": 11,
+    "Tomato___Septoria_leaf_spot": 12,
+    "Tomato___Spider_mites Two-spotted_spider_mite": 13,
+    "Tomato___Target_Spot": 14,
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus": 15
+}
