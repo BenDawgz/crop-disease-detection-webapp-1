@@ -134,8 +134,9 @@ MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
 RUNTIME_CLASS_INDICES_PATH = Path(os.environ.get("RUNTIME_CLASS_INDICES_PATH", INSTANCE_DIR / "class_indices.json"))
 BUNDLED_CLASS_INDICES_PATH = Path(os.environ.get("BUNDLED_CLASS_INDICES_PATH", BASE_DIR / "class_indices.json"))
 REQUIRE_NON_CROP_CLASS = os.environ.get("REQUIRE_NON_CROP_CLASS", "1").lower() in {"1", "true", "yes", "on"}
-CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.80"))
+CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.70"))
 PREDICTION_MARGIN_THRESHOLD = float(os.environ.get("PREDICTION_MARGIN_THRESHOLD", "0.20"))
+SUPPORTED_FALLBACK_CONFIDENCE = float(os.environ.get("SUPPORTED_FALLBACK_CONFIDENCE", "0.001"))
 MIN_PLANT_RATIO = float(os.environ.get("MIN_PLANT_RATIO", "0.12"))
 MIN_PLANT_CONTOUR_RATIO = float(os.environ.get("MIN_PLANT_CONTOUR_RATIO", "0.025"))
 MIN_GREEN_RATIO = float(os.environ.get("MIN_GREEN_RATIO", "0.03"))
@@ -609,6 +610,19 @@ def _safe_softmax(x):
         return tf.nn.softmax(x).numpy()
     return x
 
+def _best_supported_prediction(probs):
+    supported = [
+        (index, float(prob))
+        for index, prob in enumerate(probs)
+        if index < len(CLASS_NAMES) and CLASS_NAMES[index] != NON_CROP_CLASS_NAME
+    ]
+    if not supported:
+        return None, None, 0.0, 0.0
+    supported.sort(key=lambda item: item[1], reverse=True)
+    index, probability = supported[0]
+    second = supported[1][1] if len(supported) > 1 else 0.0
+    return index, CLASS_NAMES[index], probability * 100.0, probability - second
+
 def is_leaf_image(image_path, min_plant_ratio=MIN_PLANT_RATIO):
     """
     Check if an image likely contains a plant/leaf by analyzing color distribution.
@@ -643,6 +657,7 @@ def is_leaf_image(image_path, min_plant_ratio=MIN_PLANT_RATIO):
 
         green_ratio = cv2.countNonZero(green_mask) / total_pixels
         yellow_brown_ratio = cv2.countNonZero(yellow_brown_mask) / total_pixels
+        brown_ratio = cv2.countNonZero(brown_mask) / total_pixels
 
         ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
         skin_mask = cv2.inRange(ycrcb, (0, 133, 77), (255, 173, 127))
@@ -650,8 +665,8 @@ def is_leaf_image(image_path, min_plant_ratio=MIN_PLANT_RATIO):
         if skin_ratio >= MAX_SKIN_RATIO and green_ratio < max(MIN_GREEN_RATIO * 2, 0.08):
             return False, "This image appears to contain a person or non-crop object. Please capture a clear crop leaf."
 
-        if green_ratio < MIN_GREEN_RATIO and (green_ratio + yellow_brown_ratio) < min_plant_ratio:
-            return False, "This image does not contain enough green or yellow-green leaf area for crop disease detection."
+        if green_ratio < MIN_GREEN_RATIO and (green_ratio + yellow_brown_ratio + brown_ratio) < min_plant_ratio:
+            return False, "This image does not contain enough leaf area for crop disease detection."
 
         # Combine all plant-related colors
         plant_mask = green_mask | yellow_brown_mask | brown_mask
@@ -710,11 +725,17 @@ def processing(fname):
         return f"Could not process image: {e}", 0.0, None
 
     if label == NON_CROP_CLASS_NAME:
-        return (
-            INVALID_IMAGE_LABEL,
-            round(confidence, 2),
-            INVALID_IMAGE_LABEL
-        )
+        fallback_idx, fallback_label, fallback_confidence, fallback_margin = _best_supported_prediction(probs)
+        if fallback_label and fallback_confidence >= (SUPPORTED_FALLBACK_CONFIDENCE * 100.0):
+            label = fallback_label
+            confidence = fallback_confidence
+            prediction_margin = fallback_margin
+        else:
+            return (
+                INVALID_IMAGE_LABEL,
+                round(confidence, 2),
+                INVALID_IMAGE_LABEL
+            )
 
     if confidence < (CONFIDENCE_THRESHOLD * 100.0) or prediction_margin < PREDICTION_MARGIN_THRESHOLD:
         return (
