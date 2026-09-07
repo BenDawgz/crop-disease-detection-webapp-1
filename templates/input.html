@@ -395,6 +395,7 @@ block body %}
 
       <form method="POST" action="/upload" enctype="multipart/form-data" id="uploadForm">
         <input id="fileInput" name="file" type="file" accept="image/*" hidden required />
+        <input id="sourceInput" name="source" type="hidden" value="upload" />
 
         <div style="display: flex; flex-direction: column; gap: 12px;">
           <div class="file-label" id="fileLabel">No file selected</div>
@@ -470,6 +471,7 @@ block body %}
 <script>
 (function () {
   const fileInput  = document.getElementById('fileInput');
+  const sourceInput = document.getElementById('sourceInput');
   const fileLabel  = document.getElementById('fileLabel');
   const dropbox    = document.getElementById('dropbox');
   const preview    = document.getElementById('imgPreview');
@@ -487,11 +489,13 @@ block body %}
 
   function openPicker() {
     stopCamera();
+    sourceInput.value = 'upload';
     fileInput.click();
   }
 
   function showFile(file) {
     if (!file) return;
+    if (!sourceInput.value) sourceInput.value = 'upload';
     fileLabel.textContent = file.name;
     fileLabel.classList.add('active');
     analyzeBtn.disabled = false;
@@ -563,6 +567,7 @@ block body %}
       const transfer = new DataTransfer();
       transfer.items.add(file);
       fileInput.files = transfer.files;
+      sourceInput.value = 'camera';
       stopCamera();
       showFile(file);
     }, 'image/jpeg', 0.9);
@@ -596,6 +601,7 @@ block body %}
     var transfer = new DataTransfer();
     transfer.items.add(dt.files[0]);
     fileInput.files = transfer.files;
+    sourceInput.value = 'upload';
     showFile(dt.files[0]);
   });
 

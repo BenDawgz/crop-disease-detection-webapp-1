@@ -1,0 +1,110 @@
+{% extends 'base.html' %}
+{% block title %}Admin Dashboard{% endblock title %}
+{% block body %}
+<style>
+  .admin-page { font-family: Inter, system-ui, sans-serif; display: grid; gap: 22px; }
+  .admin-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .admin-title h2 { margin: 0 0 4px; font-size: 1.6rem; font-weight: 900; }
+  .admin-title p { margin: 0; color: #64748b; }
+  .admin-nav { display: flex; gap: 10px; flex-wrap: wrap; }
+  .admin-link, .admin-btn { border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 13px; background: #fff; color: #1e293b; font-weight: 800; text-decoration: none; cursor: pointer; }
+  .admin-btn.primary, .admin-link.primary { background: #1f5130; border-color: #1f5130; color: #fff; }
+  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .stat { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px; }
+  .stat span { display: block; color: #64748b; font-size: 0.84rem; font-weight: 700; }
+  .stat strong { display: block; font-size: 1.7rem; margin-top: 6px; }
+  .panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+  .panel h3 { margin: 0; padding: 15px 16px; font-size: 1rem; border-bottom: 1px solid #e2e8f0; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; border-bottom: 1px solid #edf2f7; padding: 10px 12px; font-size: 0.88rem; vertical-align: top; }
+  th { background: #f8fafc; color: #475569; font-size: 0.78rem; text-transform: uppercase; }
+  .flash-list { display: grid; gap: 8px; }
+  .flash-item { border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; border-radius: 8px; padding: 10px 12px; font-size: 0.9rem; }
+  .muted { color: #64748b; }
+  @media (max-width: 720px) { .stats { grid-template-columns: 1fr; } }
+</style>
+
+<section class="admin-page">
+  <div class="admin-top">
+    <div class="admin-title">
+      <h2>Admin Dashboard</h2>
+      <p>Manage treatments, monitor predictions, and trigger model retraining.</p>
+    </div>
+    <div class="admin-nav">
+      <a class="admin-link primary" href="{{ url_for('admin_treatments') }}">Treatments</a>
+      <a class="admin-link" href="{{ url_for('admin_logs') }}">Prediction Logs</a>
+      <form method="POST" action="{{ url_for('admin_logout') }}"><button class="admin-btn" type="submit">Log Out</button></form>
+    </div>
+  </div>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      <div class="flash-list">
+        {% for message in messages %}
+          <div class="flash-item">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <div class="stats">
+    <div class="stat"><span>Treatment Records</span><strong>{{ treatment_count }}</strong></div>
+    <div class="stat"><span>Prediction Logs</span><strong>{{ prediction_count }}</strong></div>
+    <div class="stat"><span>Retraining</span><strong>{% if retrain_available %}Ready{% else %}Unavailable{% endif %}</strong></div>
+  </div>
+
+  <div class="panel">
+    <h3>Retrain Model</h3>
+    <div style="padding: 16px; display: grid; gap: 12px;">
+      <p class="muted" style="margin: 0;">
+        Retraining uses <code>Main_folder/train_model.py</code> and the local <code>Main_folder/dataset_split</code> folders.
+      </p>
+      <form method="POST" action="{{ url_for('admin_retrain') }}">
+        <button class="admin-btn primary" type="submit" {% if not retrain_available %}disabled{% endif %}>Start Retraining</button>
+      </form>
+      {% if not retrain_available %}
+        <p class="muted" style="margin: 0;">Training files are not available in this environment. They are usually kept locally, not inside the hosted Railway app.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Recent Retraining Jobs</h3>
+    <table>
+      <thead><tr><th>ID</th><th>Started</th><th>Status</th><th>Message</th><th>Log</th></tr></thead>
+      <tbody>
+        {% for job in retrain_jobs %}
+          <tr>
+            <td>#{{ job.id }}</td>
+            <td>{{ job.started_at }}</td>
+            <td>{{ job.status }}</td>
+            <td>{{ job.message or '' }}</td>
+            <td><a href="{{ url_for('admin_retrain_log', job_id=job.id) }}">View</a></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="muted">No retraining jobs yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h3>Recent Predictions</h3>
+    <table>
+      <thead><tr><th>Time</th><th>Source</th><th>Prediction</th><th>Confidence</th></tr></thead>
+      <tbody>
+        {% for log in recent_logs %}
+          <tr>
+            <td>{{ log.created_at }}</td>
+            <td>{{ log.source }}</td>
+            <td>{{ log.label }}</td>
+            <td>{{ '%.2f'|format(log.confidence) }}%</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="muted">No predictions logged yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock body %}

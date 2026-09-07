@@ -26,3 +26,4 @@ static/shots/*.gif
 *.pyc
 .env
 .DS_Store
+instance/

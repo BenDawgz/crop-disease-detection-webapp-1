@@ -1,9 +1,16 @@
 import tensorflow as tf
 from flask import Flask, render_template, request, Response, flash, redirect, session, url_for
 import cv2
+import hmac
 import json
 import os
+import sqlite3
+import subprocess
+import sys
+import threading
 from pathlib import Path
+from datetime import datetime, timezone
+from functools import wraps
 from uuid import uuid4
 from werkzeug.utils import secure_filename
 from tensorflow.keras.models import load_model
@@ -17,14 +24,21 @@ switch = 0
 app = Flask(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_FOLDER = BASE_DIR / 'static' / 'shots'
+INSTANCE_DIR = BASE_DIR / 'instance'
+DATABASE_PATH = Path(os.environ.get('DATABASE_PATH', INSTANCE_DIR / 'crop_admin.db'))
+RETRAIN_LOG_DIR = INSTANCE_DIR / 'retrain_logs'
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-cropdisease-change-me')
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 ENABLE_CAMERA = os.environ.get('ENABLE_CAMERA', '').lower() in {'1', 'true', 'yes', 'on'}
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
 
 # Ensure shots folder exists
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+RETRAIN_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Camera is disabled by default because hosted environments usually have no webcam.
 camera = None
@@ -180,6 +194,183 @@ TREATMENT_DICT = {
     "Tomato___Tomato_Yellow_Leaf_Curl_Virus": "Use insecticides to control whiteflies, remove infected plants, and use resistant varieties."
 }
 
+MODEL_LOCK = threading.Lock()
+
+def utc_now():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
+def get_db():
+    conn = sqlite3.connect(DATABASE_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS treatments (
+                label TEXT PRIMARY KEY,
+                treatment TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS prediction_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                original_filename TEXT,
+                source TEXT NOT NULL,
+                label TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                treatment TEXT,
+                client_ip TEXT,
+                user_agent TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS retrain_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                message TEXT,
+                command TEXT,
+                log_path TEXT
+            )
+        """)
+        for label in CLASS_NAMES:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO treatments (label, treatment, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (label, TREATMENT_DICT.get(label, "No treatment info available"), utc_now())
+            )
+
+def admin_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get('admin_logged_in'):
+            flash("Please log in as admin.")
+            return redirect(url_for('admin_login', next=request.path))
+        return view(*args, **kwargs)
+    return wrapped
+
+def treatment_for(label):
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT treatment FROM treatments WHERE label = ?",
+                (label,)
+            ).fetchone()
+            if row:
+                return row['treatment']
+    except sqlite3.Error as e:
+        print(f"Treatment lookup failed: {e}")
+    return TREATMENT_DICT.get(label, "No treatment info available")
+
+def log_prediction(filename, label, confidence, treatment):
+    pending = session.pop('pending_prediction_log', None)
+    if not pending or pending.get('filename') != filename:
+        return
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO prediction_logs (
+                    created_at, filename, original_filename, source, label,
+                    confidence, treatment, client_ip, user_agent
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    utc_now(),
+                    filename,
+                    pending.get('original_filename'),
+                    pending.get('source', 'upload'),
+                    label,
+                    float(confidence or 0.0),
+                    treatment,
+                    request.headers.get('X-Forwarded-For', request.remote_addr),
+                    request.headers.get('User-Agent'),
+                )
+            )
+    except sqlite3.Error as e:
+        print(f"Prediction log failed: {e}")
+
+def reload_model():
+    global MODEL, MODEL_IMG_SIZE
+    loaded = load_model(MODEL_PATH)
+    with MODEL_LOCK:
+        MODEL = loaded
+        MODEL_IMG_SIZE = _infer_model_img_size(MODEL, fallback=(224, 224))
+
+def mark_retrain_job(job_id, status, message, finished=False):
+    with get_db() as conn:
+        if finished:
+            conn.execute(
+                "UPDATE retrain_jobs SET status = ?, message = ?, finished_at = ? WHERE id = ?",
+                (status, message, utc_now(), job_id)
+            )
+        else:
+            conn.execute(
+                "UPDATE retrain_jobs SET status = ?, message = ? WHERE id = ?",
+                (status, message, job_id)
+            )
+
+def run_retrain_job(job_id, command, log_path):
+    try:
+        with open(log_path, 'w', encoding='utf-8') as log_file:
+            process = subprocess.run(
+                command,
+                cwd=str(BASE_DIR),
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False
+            )
+        if process.returncode != 0:
+            mark_retrain_job(job_id, "FAILED", f"Training exited with code {process.returncode}.", finished=True)
+            return
+        reload_model()
+        mark_retrain_job(job_id, "SUCCESS", "Training completed and the model was reloaded.", finished=True)
+    except Exception as e:
+        mark_retrain_job(job_id, "FAILED", str(e), finished=True)
+
+def start_retrain_job():
+    script_path = BASE_DIR / "Main_folder" / "train_model.py"
+    train_dir = BASE_DIR / "Main_folder" / "dataset_split" / "train"
+    val_dir = BASE_DIR / "Main_folder" / "dataset_split" / "val"
+    if not script_path.exists() or not train_dir.exists() or not val_dir.exists():
+        return False, "Training files are not available in this environment."
+
+    with get_db() as conn:
+        active = conn.execute(
+            "SELECT id FROM retrain_jobs WHERE status = 'RUNNING' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if active:
+            return False, f"Retraining job #{active['id']} is already running."
+        command = [sys.executable, str(script_path)]
+        log_path = RETRAIN_LOG_DIR / f"retrain_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.log"
+        cursor = conn.execute(
+            """
+            INSERT INTO retrain_jobs (started_at, status, message, command, log_path)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (utc_now(), "RUNNING", "Training started.", " ".join(command), str(log_path))
+        )
+        job_id = cursor.lastrowid
+
+    thread = threading.Thread(
+        target=run_retrain_job,
+        args=(job_id, command, str(log_path)),
+        daemon=True
+    )
+    thread.start()
+    return True, f"Retraining job #{job_id} started."
+
+init_db()
+
 def _infer_model_img_size(model, fallback=(224, 224)):
     """
     Try to read (H, W) from the loaded model.
@@ -279,7 +470,8 @@ def processing(fname):
         input_arr = tf.keras.preprocessing.image.img_to_array(img)
         input_arr = np.expand_dims(input_arr, axis=0).astype("float32") / 255.0
 
-        preds = MODEL.predict(input_arr)
+        with MODEL_LOCK:
+            preds = MODEL.predict(input_arr)
         scores = preds[0]
         probs = _safe_softmax(scores)
         idx = int(np.argmax(probs))
@@ -291,7 +483,7 @@ def processing(fname):
     if confidence < (CONFIDENCE_THRESHOLD * 100.0):
         return "Uncertain - Image may not be a crop leaf", confidence, None
 
-    treatment = TREATMENT_DICT.get(label, "No treatment info available")
+    treatment = treatment_for(label)
     return label, round(confidence, 2), treatment
 
 def render_result(fname):
@@ -300,6 +492,7 @@ def render_result(fname):
         flash("No image to display.")
         return redirect('/input')
     label, confidence, treatment = processing(fname)
+    log_prediction(fname, label, confidence, treatment)
     return render_template('display.html',
                            variable_name=fname,
                            label=label,
@@ -334,6 +527,11 @@ def upload():
         save_path = UPLOAD_FOLDER / filename
         file.save(save_path)
         session['last_filename'] = filename
+        session['pending_prediction_log'] = {
+            'filename': filename,
+            'original_filename': secure_filename(file.filename),
+            'source': request.form.get('source', 'upload')
+        }
         flash("Image successfully uploaded.")
         return redirect(url_for('display_image', filename=filename))
     else:
@@ -348,6 +546,145 @@ def display_image():
         return render_result(filename)
     flash("No image to display.")
     return redirect('/input')
+
+# ---------- Admin ----------
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        if hmac.compare_digest(username, ADMIN_USERNAME) and hmac.compare_digest(password, ADMIN_PASSWORD):
+            session['admin_logged_in'] = True
+            flash("Admin login successful.")
+            next_url = request.args.get('next') or url_for('admin_dashboard')
+            if not next_url.startswith('/'):
+                next_url = url_for('admin_dashboard')
+            return redirect(next_url)
+        flash("Invalid admin username or password.")
+    return render_template('admin_login.html')
+
+@app.route('/admin/logout', methods=['POST'])
+def admin_logout():
+    session.pop('admin_logged_in', None)
+    flash("Admin logged out.")
+    return redirect(url_for('admin_login'))
+
+@app.route('/admin')
+@admin_required
+def admin_dashboard():
+    with get_db() as conn:
+        treatment_count = conn.execute("SELECT COUNT(*) AS total FROM treatments").fetchone()['total']
+        prediction_count = conn.execute("SELECT COUNT(*) AS total FROM prediction_logs").fetchone()['total']
+        recent_logs = conn.execute(
+            """
+            SELECT id, created_at, source, label, confidence
+            FROM prediction_logs
+            ORDER BY id DESC
+            LIMIT 8
+            """
+        ).fetchall()
+        retrain_jobs = conn.execute(
+            """
+            SELECT id, started_at, finished_at, status, message
+            FROM retrain_jobs
+            ORDER BY id DESC
+            LIMIT 5
+            """
+        ).fetchall()
+    retrain_available = (
+        (BASE_DIR / "Main_folder" / "train_model.py").exists()
+        and (BASE_DIR / "Main_folder" / "dataset_split" / "train").exists()
+        and (BASE_DIR / "Main_folder" / "dataset_split" / "val").exists()
+    )
+    return render_template(
+        'admin_dashboard.html',
+        treatment_count=treatment_count,
+        prediction_count=prediction_count,
+        recent_logs=recent_logs,
+        retrain_jobs=retrain_jobs,
+        retrain_available=retrain_available
+    )
+
+@app.route('/admin/treatments', methods=['GET', 'POST'])
+@admin_required
+def admin_treatments():
+    if request.method == 'POST':
+        label = request.form.get('label', '')
+        treatment = request.form.get('treatment', '').strip()
+        if label not in CLASS_NAMES:
+            flash("Unknown crop disease class.")
+        elif not treatment:
+            flash("Treatment cannot be empty.")
+        else:
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO treatments (label, treatment, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(label) DO UPDATE SET
+                        treatment = excluded.treatment,
+                        updated_at = excluded.updated_at
+                    """,
+                    (label, treatment, utc_now())
+                )
+            flash("Treatment updated.")
+        return redirect(url_for('admin_treatments'))
+
+    with get_db() as conn:
+        treatments = conn.execute(
+            """
+            SELECT label, treatment, updated_at
+            FROM treatments
+            ORDER BY label
+            """
+        ).fetchall()
+    return render_template('admin_treatments.html', treatments=treatments)
+
+@app.route('/admin/logs')
+@admin_required
+def admin_logs():
+    try:
+        limit = min(max(int(request.args.get('limit', 100)), 1), 500)
+    except ValueError:
+        limit = 100
+    with get_db() as conn:
+        logs = conn.execute(
+            """
+            SELECT id, created_at, filename, original_filename, source, label,
+                   confidence, treatment, client_ip, user_agent
+            FROM prediction_logs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,)
+        ).fetchall()
+    return render_template('admin_logs.html', logs=logs, limit=limit)
+
+@app.route('/admin/retrain', methods=['POST'])
+@admin_required
+def admin_retrain():
+    started, message = start_retrain_job()
+    flash(message)
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/retrain/log/<int:job_id>')
+@admin_required
+def admin_retrain_log(job_id):
+    with get_db() as conn:
+        job = conn.execute(
+            "SELECT log_path FROM retrain_jobs WHERE id = ?",
+            (job_id,)
+        ).fetchone()
+    if not job or not job['log_path']:
+        return Response("Retrain log not found.", status=404, mimetype='text/plain')
+    log_path = Path(job['log_path'])
+    try:
+        log_path.resolve().relative_to(RETRAIN_LOG_DIR.resolve())
+    except ValueError:
+        return Response("Invalid retrain log path.", status=400, mimetype='text/plain')
+    if not log_path.exists():
+        return Response("Retrain log is not available yet.", status=404, mimetype='text/plain')
+    return Response(log_path.read_text(encoding='utf-8', errors='replace'), mimetype='text/plain')
 
 if __name__ == "__main__":
     debug = os.environ.get('FLASK_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}

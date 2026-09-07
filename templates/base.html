@@ -127,6 +127,11 @@
         outline: 3px solid rgba(31, 163, 90, 0.14);
         outline-offset: 3px;
       }
+      .nav-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
 
       /* main content wrapper */
       main.content {
@@ -160,7 +165,10 @@
           </div>
         </a>
 
-        <a href="/" class="btn-home" title="Go home">Go Home</a>
+        <div class="nav-actions">
+          <a href="/admin" class="btn-home" title="Open admin">Admin</a>
+          <a href="/" class="btn-home" title="Go home">Go Home</a>
+        </div>
       </div>
     </header>
 

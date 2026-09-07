@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block title %}Admin Treatments{% endblock title %}
+{% block body %}
+<style>
+  .admin-page { font-family: Inter, system-ui, sans-serif; display: grid; gap: 18px; }
+  .admin-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .admin-link, .save-btn { border: 1px solid #cbd5e1; border-radius: 8px; padding: 9px 12px; background: #fff; color: #1e293b; font-weight: 800; text-decoration: none; cursor: pointer; }
+  .save-btn { background: #1f5130; border-color: #1f5130; color: #fff; }
+  .treatment-list { display: grid; gap: 12px; }
+  .treatment-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; display: grid; gap: 10px; }
+  .treatment-card h3 { margin: 0; font-size: 0.98rem; overflow-wrap: anywhere; }
+  .treatment-card textarea { width: 100%; min-height: 92px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; font: inherit; line-height: 1.5; }
+  .meta { color: #64748b; font-size: 0.82rem; }
+  .flash-item { border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; border-radius: 8px; padding: 10px 12px; font-size: 0.9rem; }
+</style>
+
+<section class="admin-page">
+  <div class="admin-top">
+    <div>
+      <h2 style="margin: 0 0 4px;">Treatment Management</h2>
+      <p class="meta" style="margin: 0;">Edit treatment advice shown on the prediction result page.</p>
+    </div>
+    <a class="admin-link" href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+  </div>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      {% for message in messages %}
+        <div class="flash-item">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div class="treatment-list">
+    {% for item in treatments %}
+      <form class="treatment-card" method="POST">
+        <input type="hidden" name="label" value="{{ item.label }}" />
+        <h3>{{ item.label }}</h3>
+        <textarea name="treatment" required>{{ item.treatment }}</textarea>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+          <span class="meta">Last updated: {{ item.updated_at }}</span>
+          <button class="save-btn" type="submit">Save Treatment</button>
+        </div>
+      </form>
+    {% endfor %}
+  </div>
+</section>
+{% endblock body %}

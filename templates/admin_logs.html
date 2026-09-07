@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}Prediction Logs{% endblock title %}
+{% block body %}
+<style>
+  .admin-page { font-family: Inter, system-ui, sans-serif; display: grid; gap: 18px; }
+  .admin-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .admin-link { border: 1px solid #cbd5e1; border-radius: 8px; padding: 9px 12px; background: #fff; color: #1e293b; font-weight: 800; text-decoration: none; }
+  .panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow-x: auto; }
+  table { width: 100%; min-width: 980px; border-collapse: collapse; }
+  th, td { text-align: left; border-bottom: 1px solid #edf2f7; padding: 10px 12px; font-size: 0.84rem; vertical-align: top; }
+  th { background: #f8fafc; color: #475569; font-size: 0.76rem; text-transform: uppercase; }
+  .muted { color: #64748b; }
+</style>
+
+<section class="admin-page">
+  <div class="admin-top">
+    <div>
+      <h2 style="margin: 0 0 4px;">Prediction Logs</h2>
+      <p class="muted" style="margin: 0;">Showing the latest {{ limit }} prediction records.</p>
+    </div>
+    <a class="admin-link" href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+  </div>
+
+  <div class="panel">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Time</th>
+          <th>Source</th>
+          <th>Original File</th>
+          <th>Prediction</th>
+          <th>Confidence</th>
+          <th>Client IP</th>
+          <th>User Agent</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+          <tr>
+            <td>#{{ log.id }}</td>
+            <td>{{ log.created_at }}</td>
+            <td>{{ log.source }}</td>
+            <td>{{ log.original_filename or log.filename }}</td>
+            <td>{{ log.label }}</td>
+            <td>{{ '%.2f'|format(log.confidence) }}%</td>
+            <td>{{ log.client_ip or '' }}</td>
+            <td>{{ log.user_agent or '' }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="8" class="muted">No predictions have been logged yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock body %}

@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+instance/
 
 # Unused model files (only best_model.h5 is used by the app)
 final_model.h5
