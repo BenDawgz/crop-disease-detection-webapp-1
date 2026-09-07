@@ -466,6 +466,7 @@ def start_retrain_job():
             "TRAIN_DIR": str(source['train_dir']),
             "VAL_DIR": str(source['val_dir']),
             "MODEL_OUTPUT": str(pending_model_path),
+            "INITIAL_MODEL_PATH": str(active_model_path()),
             "CLASS_INDICES_OUTPUT": str(INSTANCE_DIR / "class_indices.json"),
             "TRAINING_HISTORY_OUTPUT": str(RETRAIN_LOG_DIR / "training_history.pkl"),
             "RETRAIN_EPOCHS": os.environ.get("RETRAIN_EPOCHS", "10"),

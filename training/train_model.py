@@ -14,12 +14,19 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 TRAIN_DIR = Path(os.environ["TRAIN_DIR"])
 VAL_DIR = Path(os.environ["VAL_DIR"])
 MODEL_OUTPUT = Path(os.environ["MODEL_OUTPUT"])
+INITIAL_MODEL_PATH = os.environ.get("INITIAL_MODEL_PATH")
 CLASS_INDICES_OUTPUT = Path(os.environ.get("CLASS_INDICES_OUTPUT", MODEL_OUTPUT.parent / "class_indices.json"))
 TRAINING_HISTORY_OUTPUT = Path(os.environ.get("TRAINING_HISTORY_OUTPUT", MODEL_OUTPUT.parent / "training_history.pkl"))
 
 IMG_SIZE = tuple(int(part.strip()) for part in os.environ.get("RETRAIN_IMG_SIZE", "256,256").split(","))
 BATCH_SIZE = int(os.environ.get("RETRAIN_BATCH_SIZE", "16"))
 EPOCHS = int(os.environ.get("RETRAIN_EPOCHS", "10"))
+LEARNING_RATE = float(os.environ.get("RETRAIN_LEARNING_RATE", "0.00001"))
+TRAIN_LAST_LAYERS = int(os.environ.get("RETRAIN_TRAIN_LAST_LAYERS", "0"))
+STEPS_PER_EPOCH = os.environ.get("RETRAIN_STEPS_PER_EPOCH")
+VALIDATION_STEPS = os.environ.get("RETRAIN_VALIDATION_STEPS")
+STEPS_PER_EPOCH = int(STEPS_PER_EPOCH) if STEPS_PER_EPOCH else None
+VALIDATION_STEPS = int(VALIDATION_STEPS) if VALIDATION_STEPS else None
 
 MODEL_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 CLASS_INDICES_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
@@ -63,31 +70,53 @@ print(f"Number of classes: {num_classes}")
 print(f"Training samples: {train_gen.samples}")
 print(f"Validation samples: {val_gen.samples}")
 
-model = Sequential([
-    Conv2D(32, (3, 3), activation="relu", input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3)),
-    BatchNormalization(),
-    MaxPooling2D((2, 2)),
+model = None
+if INITIAL_MODEL_PATH:
+    initial_path = Path(INITIAL_MODEL_PATH)
+    if initial_path.exists():
+        candidate = tf.keras.models.load_model(str(initial_path))
+        if candidate.output_shape[-1] == num_classes:
+            model = candidate
+            print(f"Loaded initial model for fine-tuning: {initial_path}")
+            if TRAIN_LAST_LAYERS > 0:
+                for layer in model.layers[:-TRAIN_LAST_LAYERS]:
+                    layer.trainable = False
+                for layer in model.layers[-TRAIN_LAST_LAYERS:]:
+                    layer.trainable = True
+                print(f"Training only the last {TRAIN_LAST_LAYERS} layer(s).")
+        else:
+            print(
+                "Initial model class count does not match the dataset. "
+                f"Expected {num_classes}, got {candidate.output_shape[-1]}."
+            )
 
-    Conv2D(64, (3, 3), activation="relu"),
-    BatchNormalization(),
-    MaxPooling2D((2, 2)),
+if model is None:
+    print("Building a new CNN model.")
+    model = Sequential([
+        Conv2D(32, (3, 3), activation="relu", input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3)),
+        BatchNormalization(),
+        MaxPooling2D((2, 2)),
 
-    Conv2D(128, (3, 3), activation="relu"),
-    BatchNormalization(),
-    MaxPooling2D((2, 2)),
+        Conv2D(64, (3, 3), activation="relu"),
+        BatchNormalization(),
+        MaxPooling2D((2, 2)),
 
-    Conv2D(256, (3, 3), activation="relu"),
-    BatchNormalization(),
-    MaxPooling2D((2, 2)),
+        Conv2D(128, (3, 3), activation="relu"),
+        BatchNormalization(),
+        MaxPooling2D((2, 2)),
 
-    Flatten(),
-    Dense(512, activation="relu"),
-    Dropout(0.5),
-    Dense(num_classes, activation="softmax"),
-])
+        Conv2D(256, (3, 3), activation="relu"),
+        BatchNormalization(),
+        MaxPooling2D((2, 2)),
+
+        Flatten(),
+        Dense(512, activation="relu"),
+        Dropout(0.5),
+        Dense(num_classes, activation="softmax"),
+    ])
 
 model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+    optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
     loss="categorical_crossentropy",
     metrics=["accuracy"],
 )
@@ -106,6 +135,8 @@ history = model.fit(
     train_gen,
     epochs=EPOCHS,
     validation_data=val_gen,
+    steps_per_epoch=STEPS_PER_EPOCH,
+    validation_steps=VALIDATION_STEPS,
     callbacks=callbacks,
 )
 
