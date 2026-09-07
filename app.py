@@ -141,7 +141,7 @@ MIN_PLANT_CONTOUR_RATIO = float(os.environ.get("MIN_PLANT_CONTOUR_RATIO", "0.025
 MIN_GREEN_RATIO = float(os.environ.get("MIN_GREEN_RATIO", "0.03"))
 MAX_SKIN_RATIO = float(os.environ.get("MAX_SKIN_RATIO", "0.18"))
 NON_CROP_CLASS_NAME = "Not_A_Crop"
-INVALID_IMAGE_LABEL = "Not a supported crop leaf"
+INVALID_IMAGE_LABEL = "image not supported"
 UNCERTAIN_IMAGE_LABEL = "Uncertain image"
 
 DEFAULT_CLASS_NAMES = [
@@ -213,7 +213,7 @@ TREATMENT_DICT = {
     "Tomato___Spider_mites Two-spotted_spider_mite": "Use miticides or neem oil.",
     "Tomato___Target_Spot": "Apply fungicides and ensure proper plant spacing.",
     "Tomato___Tomato_Yellow_Leaf_Curl_Virus": "Use insecticides to control whiteflies, remove infected plants, and use resistant varieties.",
-    NON_CROP_CLASS_NAME: "This image is not a supported crop leaf. Please upload or capture a clear crop leaf image."
+    NON_CROP_CLASS_NAME: INVALID_IMAGE_LABEL
 }
 
 MODEL_LOCK = threading.Lock()
@@ -688,7 +688,7 @@ def processing(fname):
     # Step 1: Check if the image looks like a leaf
     is_leaf, reason = is_leaf_image(image_path)
     if not is_leaf:
-        return INVALID_IMAGE_LABEL, 0.0, reason
+        return INVALID_IMAGE_LABEL, 0.0, INVALID_IMAGE_LABEL
 
     # Step 2: Run the model
     try:
@@ -713,7 +713,7 @@ def processing(fname):
         return (
             INVALID_IMAGE_LABEL,
             round(confidence, 2),
-            "The model identified this as a non-crop image. Please upload or capture a clear crop leaf."
+            INVALID_IMAGE_LABEL
         )
 
     if confidence < (CONFIDENCE_THRESHOLD * 100.0) or prediction_margin < PREDICTION_MARGIN_THRESHOLD:
