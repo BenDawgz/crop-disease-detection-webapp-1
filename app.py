@@ -135,6 +135,8 @@ CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.80"))
 PREDICTION_MARGIN_THRESHOLD = float(os.environ.get("PREDICTION_MARGIN_THRESHOLD", "0.20"))
 MIN_PLANT_RATIO = float(os.environ.get("MIN_PLANT_RATIO", "0.12"))
 MIN_PLANT_CONTOUR_RATIO = float(os.environ.get("MIN_PLANT_CONTOUR_RATIO", "0.025"))
+MIN_GREEN_RATIO = float(os.environ.get("MIN_GREEN_RATIO", "0.03"))
+MAX_SKIN_RATIO = float(os.environ.get("MAX_SKIN_RATIO", "0.18"))
 INVALID_IMAGE_LABEL = "Not a supported crop leaf"
 UNCERTAIN_IMAGE_LABEL = "Uncertain image"
 
@@ -565,6 +567,18 @@ def is_leaf_image(image_path, min_plant_ratio=MIN_PLANT_RATIO):
         yellow_brown_mask = cv2.inRange(hsv, (10, 45, 35), (25, 255, 240))
         # Dark brown/necrotic (severely diseased): H=0-10 with low-mid saturation
         brown_mask = cv2.inRange(hsv, (0, 35, 25), (10, 220, 190))
+
+        green_ratio = cv2.countNonZero(green_mask) / total_pixels
+        yellow_brown_ratio = cv2.countNonZero(yellow_brown_mask) / total_pixels
+
+        ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+        skin_mask = cv2.inRange(ycrcb, (0, 133, 77), (255, 173, 127))
+        skin_ratio = cv2.countNonZero(skin_mask) / total_pixels
+        if skin_ratio >= MAX_SKIN_RATIO and green_ratio < max(MIN_GREEN_RATIO * 2, 0.08):
+            return False, "This image appears to contain a person or non-crop object. Please capture a clear crop leaf."
+
+        if green_ratio < MIN_GREEN_RATIO and (green_ratio + yellow_brown_ratio) < min_plant_ratio:
+            return False, "This image does not contain enough green or yellow-green leaf area for crop disease detection."
 
         # Combine all plant-related colors
         plant_mask = green_mask | yellow_brown_mask | brown_mask
