@@ -7,12 +7,13 @@
     "Grape___Esca_(Black_Measles)": 5,
     "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)": 6,
     "Grape___healthy": 7,
-    "Tomato___Bacterial_spot": 8,
-    "Tomato___Early_blight": 9,
-    "Tomato___Late_blight": 10,
-    "Tomato___Leaf_Mold": 11,
-    "Tomato___Septoria_leaf_spot": 12,
-    "Tomato___Spider_mites Two-spotted_spider_mite": 13,
-    "Tomato___Target_Spot": 14,
-    "Tomato___Tomato_Yellow_Leaf_Curl_Virus": 15
+    "Not_A_Crop": 8,
+    "Tomato___Bacterial_spot": 9,
+    "Tomato___Early_blight": 10,
+    "Tomato___Late_blight": 11,
+    "Tomato___Leaf_Mold": 12,
+    "Tomato___Septoria_leaf_spot": 13,
+    "Tomato___Spider_mites Two-spotted_spider_mite": 14,
+    "Tomato___Target_Spot": 15,
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus": 16
 }

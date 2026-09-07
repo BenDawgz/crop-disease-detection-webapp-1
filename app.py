@@ -137,6 +137,7 @@ MIN_PLANT_RATIO = float(os.environ.get("MIN_PLANT_RATIO", "0.12"))
 MIN_PLANT_CONTOUR_RATIO = float(os.environ.get("MIN_PLANT_CONTOUR_RATIO", "0.025"))
 MIN_GREEN_RATIO = float(os.environ.get("MIN_GREEN_RATIO", "0.03"))
 MAX_SKIN_RATIO = float(os.environ.get("MAX_SKIN_RATIO", "0.18"))
+NON_CROP_CLASS_NAME = "Not_A_Crop"
 INVALID_IMAGE_LABEL = "Not a supported crop leaf"
 UNCERTAIN_IMAGE_LABEL = "Uncertain image"
 
@@ -149,6 +150,7 @@ DEFAULT_CLASS_NAMES = [
     "Grape___Esca_(Black_Measles)",
     "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)",
     "Grape___healthy",
+    NON_CROP_CLASS_NAME,
     "Tomato___Bacterial_spot",
     "Tomato___Early_blight",
     "Tomato___Late_blight",
@@ -203,7 +205,8 @@ TREATMENT_DICT = {
     "Tomato___Septoria_leaf_spot": "Remove affected leaves and use fungicides.",
     "Tomato___Spider_mites Two-spotted_spider_mite": "Use miticides or neem oil.",
     "Tomato___Target_Spot": "Apply fungicides and ensure proper plant spacing.",
-    "Tomato___Tomato_Yellow_Leaf_Curl_Virus": "Use insecticides to control whiteflies, remove infected plants, and use resistant varieties."
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus": "Use insecticides to control whiteflies, remove infected plants, and use resistant varieties.",
+    NON_CROP_CLASS_NAME: "This image is not a supported crop leaf. Please upload or capture a clear crop leaf image."
 }
 
 MODEL_LOCK = threading.Lock()
@@ -635,6 +638,13 @@ def processing(fname):
         prediction_margin = float(probs[idx]) - second_best
     except Exception as e:
         return f"Could not process image: {e}", 0.0, None
+
+    if label == NON_CROP_CLASS_NAME:
+        return (
+            INVALID_IMAGE_LABEL,
+            round(confidence, 2),
+            "The model identified this as a non-crop image. Please upload or capture a clear crop leaf."
+        )
 
     if confidence < (CONFIDENCE_THRESHOLD * 100.0) or prediction_margin < PREDICTION_MARGIN_THRESHOLD:
         return (

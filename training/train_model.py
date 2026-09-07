@@ -15,6 +15,7 @@ TRAIN_DIR = Path(os.environ["TRAIN_DIR"])
 VAL_DIR = Path(os.environ["VAL_DIR"])
 MODEL_OUTPUT = Path(os.environ["MODEL_OUTPUT"])
 INITIAL_MODEL_PATH = os.environ.get("INITIAL_MODEL_PATH")
+INITIAL_CLASS_INDICES_PATH = os.environ.get("INITIAL_CLASS_INDICES_PATH")
 CLASS_INDICES_OUTPUT = Path(os.environ.get("CLASS_INDICES_OUTPUT", MODEL_OUTPUT.parent / "class_indices.json"))
 TRAINING_HISTORY_OUTPUT = Path(os.environ.get("TRAINING_HISTORY_OUTPUT", MODEL_OUTPUT.parent / "training_history.pkl"))
 
@@ -23,6 +24,7 @@ BATCH_SIZE = int(os.environ.get("RETRAIN_BATCH_SIZE", "16"))
 EPOCHS = int(os.environ.get("RETRAIN_EPOCHS", "10"))
 LEARNING_RATE = float(os.environ.get("RETRAIN_LEARNING_RATE", "0.00001"))
 TRAIN_LAST_LAYERS = int(os.environ.get("RETRAIN_TRAIN_LAST_LAYERS", "0"))
+REPLACE_CLASSIFIER_HEAD = os.environ.get("RETRAIN_REPLACE_CLASSIFIER_HEAD", "").lower() in {"1", "true", "yes", "on"}
 STEPS_PER_EPOCH = os.environ.get("RETRAIN_STEPS_PER_EPOCH")
 VALIDATION_STEPS = os.environ.get("RETRAIN_VALIDATION_STEPS")
 STEPS_PER_EPOCH = int(STEPS_PER_EPOCH) if STEPS_PER_EPOCH else None
@@ -89,6 +91,33 @@ if INITIAL_MODEL_PATH:
                 "Initial model class count does not match the dataset. "
                 f"Expected {num_classes}, got {candidate.output_shape[-1]}."
             )
+            if REPLACE_CLASSIFIER_HEAD and len(candidate.layers) >= 2:
+                print("Replacing the final classifier layer for the new class count.")
+                model = Sequential(candidate.layers[:-1] + [Dense(num_classes, activation="softmax", name="classifier_output")])
+                model.build((None, IMG_SIZE[0], IMG_SIZE[1], 3))
+                initial_indices_path = Path(
+                    INITIAL_CLASS_INDICES_PATH or initial_path.with_name("class_indices.json")
+                )
+                if initial_indices_path.exists():
+                    with initial_indices_path.open("r", encoding="utf-8") as f:
+                        initial_class_indices = json.load(f)
+                    try:
+                        old_weights, old_bias = candidate.layers[-1].get_weights()
+                        new_weights, new_bias = model.layers[-1].get_weights()
+                        copied = 0
+                        for label, old_index in initial_class_indices.items():
+                            if label in train_gen.class_indices:
+                                new_index = train_gen.class_indices[label]
+                                new_weights[:, new_index] = old_weights[:, int(old_index)]
+                                new_bias[new_index] = old_bias[int(old_index)]
+                                copied += 1
+                        model.layers[-1].set_weights([new_weights, new_bias])
+                        print(f"Copied classifier weights for {copied} existing class(es).")
+                    except Exception as copy_error:
+                        print(f"Could not copy old classifier weights: {copy_error}")
+                for layer in model.layers[:-1]:
+                    layer.trainable = False
+                model.layers[-1].trainable = True
 
 if model is None:
     print("Building a new CNN model.")
