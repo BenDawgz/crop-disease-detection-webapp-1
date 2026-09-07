@@ -32,6 +32,7 @@
     </div>
     <div class="admin-nav">
       <a class="admin-link primary" href="{{ url_for('admin_treatments') }}">Treatments</a>
+      <a class="admin-link" href="{{ url_for('admin_training_data') }}">Training Data</a>
       <a class="admin-link" href="{{ url_for('admin_logs') }}">Prediction Logs</a>
       <form method="POST" action="{{ url_for('admin_logout') }}"><button class="admin-btn" type="submit">Log Out</button></form>
     </div>
@@ -50,21 +51,24 @@
   <div class="stats">
     <div class="stat"><span>Treatment Records</span><strong>{{ treatment_count }}</strong></div>
     <div class="stat"><span>Prediction Logs</span><strong>{{ prediction_count }}</strong></div>
-    <div class="stat"><span>Retraining</span><strong>{% if retrain_available %}Ready{% else %}Unavailable{% endif %}</strong></div>
+    <div class="stat"><span>Retraining</span><strong>{{ retrain_status_label }}</strong></div>
   </div>
 
   <div class="panel">
     <h3>Retrain Model</h3>
     <div style="padding: 16px; display: grid; gap: 12px;">
       <p class="muted" style="margin: 0;">
-        Retraining uses <code>Main_folder/train_model.py</code> and the local <code>Main_folder/dataset_split</code> folders.
+        Retraining uses the uploaded training and validation images stored in the app volume. Add images from the Training Data page until every class has both train and validation samples.
       </p>
       <form method="POST" action="{{ url_for('admin_retrain') }}">
         <button class="admin-btn primary" type="submit" {% if not retrain_available %}disabled{% endif %}>Start Retraining</button>
       </form>
       {% if not retrain_available %}
-        <p class="muted" style="margin: 0;">Training files are not available in this environment. They are usually kept locally, not inside the hosted Railway app.</p>
+        <p class="muted" style="margin: 0;">{{ retrain_status_message }}</p>
       {% endif %}
+      <p class="muted" style="margin: 0;">
+        Current uploaded images: {{ total_train }} train and {{ total_val }} validation.
+      </p>
     </div>
   </div>
 

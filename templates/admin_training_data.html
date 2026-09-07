@@ -1,0 +1,116 @@
+{% extends 'base.html' %}
+{% block title %}Training Data{% endblock title %}
+{% block body %}
+<style>
+  .admin-page { font-family: Inter, system-ui, sans-serif; display: grid; gap: 22px; }
+  .admin-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .admin-title h2 { margin: 0 0 4px; font-size: 1.6rem; font-weight: 900; }
+  .admin-title p { margin: 0; color: #64748b; }
+  .admin-nav { display: flex; gap: 10px; flex-wrap: wrap; }
+  .admin-link, .admin-btn { border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 13px; background: #fff; color: #1e293b; font-weight: 800; text-decoration: none; cursor: pointer; }
+  .admin-btn.primary, .admin-link.primary { background: #1f5130; border-color: #1f5130; color: #fff; }
+  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .stat { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px; }
+  .stat span { display: block; color: #64748b; font-size: 0.84rem; font-weight: 700; }
+  .stat strong { display: block; font-size: 1.7rem; margin-top: 6px; }
+  .panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+  .panel h3 { margin: 0; padding: 15px 16px; font-size: 1rem; border-bottom: 1px solid #e2e8f0; }
+  .panel-body { padding: 16px; display: grid; gap: 14px; }
+  .form-grid { display: grid; grid-template-columns: minmax(220px, 1fr) 160px minmax(220px, 1fr) auto; gap: 12px; align-items: end; }
+  label { display: grid; gap: 6px; color: #334155; font-size: 0.86rem; font-weight: 800; }
+  select, input[type="file"] { border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; background: #fff; color: #0f172a; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; border-bottom: 1px solid #edf2f7; padding: 10px 12px; font-size: 0.88rem; vertical-align: top; }
+  th { background: #f8fafc; color: #475569; font-size: 0.78rem; text-transform: uppercase; }
+  .flash-list { display: grid; gap: 8px; }
+  .flash-item { border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; border-radius: 8px; padding: 10px 12px; font-size: 0.9rem; }
+  .muted { color: #64748b; }
+  .status-ready { color: #166534; font-weight: 900; }
+  .status-missing { color: #b45309; font-weight: 900; }
+  @media (max-width: 860px) {
+    .stats, .form-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<section class="admin-page">
+  <div class="admin-top">
+    <div class="admin-title">
+      <h2>Training Data</h2>
+      <p>Upload labeled images for retraining the crop disease model.</p>
+    </div>
+    <div class="admin-nav">
+      <a class="admin-link" href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+      <a class="admin-link" href="{{ url_for('admin_treatments') }}">Treatments</a>
+      <a class="admin-link" href="{{ url_for('admin_logs') }}">Prediction Logs</a>
+    </div>
+  </div>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      <div class="flash-list">
+        {% for message in messages %}
+          <div class="flash-item">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <div class="stats">
+    <div class="stat"><span>Retraining Status</span><strong>{{ retrain_status_label }}</strong></div>
+    <div class="stat"><span>Training Images</span><strong>{{ total_train }}</strong></div>
+    <div class="stat"><span>Validation Images</span><strong>{{ total_val }}</strong></div>
+  </div>
+
+  <div class="panel">
+    <h3>Upload Images</h3>
+    <div class="panel-body">
+      <p class="muted" style="margin: 0;">{{ retrain_status_message }}</p>
+      <form class="form-grid" method="POST" enctype="multipart/form-data" action="{{ url_for('admin_training_data') }}">
+        <label>
+          Class
+          <select name="label" required>
+            {% for label in class_names %}
+              <option value="{{ label }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Split
+          <select name="split" required>
+            <option value="train">Train</option>
+            <option value="val">Validation</option>
+          </select>
+        </label>
+        <label>
+          Images
+          <input type="file" name="files" accept="image/*" multiple required>
+        </label>
+        <button class="admin-btn primary" type="submit">Upload</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Class Coverage</h3>
+    <table>
+      <thead><tr><th>Class</th><th>Train</th><th>Validation</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for row in counts %}
+          <tr>
+            <td>{{ row.label }}</td>
+            <td>{{ row.train }}</td>
+            <td>{{ row.val }}</td>
+            <td>
+              {% if row.train > 0 and row.val > 0 %}
+                <span class="status-ready">Ready</span>
+              {% else %}
+                <span class="status-missing">Needs data</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock body %}

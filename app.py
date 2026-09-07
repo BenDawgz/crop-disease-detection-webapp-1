@@ -27,9 +27,11 @@ UPLOAD_FOLDER = BASE_DIR / 'static' / 'shots'
 INSTANCE_DIR = BASE_DIR / 'instance'
 DATABASE_PATH = Path(os.environ.get('DATABASE_PATH', INSTANCE_DIR / 'crop_admin.db'))
 RETRAIN_LOG_DIR = INSTANCE_DIR / 'retrain_logs'
+TRAINING_DATA_ROOT = Path(os.environ.get('TRAINING_DATA_ROOT', INSTANCE_DIR / 'training_data'))
+TRAINING_SCRIPT_PATH = Path(os.environ.get('TRAINING_SCRIPT_PATH', BASE_DIR / 'training' / 'train_model.py'))
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-cropdisease-change-me')
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', 64 * 1024 * 1024))
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 ENABLE_CAMERA = os.environ.get('ENABLE_CAMERA', '').lower() in {'1', 'true', 'yes', 'on'}
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
@@ -39,6 +41,7 @@ ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 RETRAIN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+TRAINING_DATA_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Camera is disabled by default because hosted environments usually have no webcam.
 camera = None
@@ -125,7 +128,9 @@ def tasks():
 # ------------------------------
 # Model and Classes
 # ------------------------------
-MODEL_PATH = os.environ.get("MODEL_PATH", str(BASE_DIR / "best_model.h5"))
+BUNDLED_MODEL_PATH = Path(os.environ.get("BUNDLED_MODEL_PATH", BASE_DIR / "best_model.h5"))
+MODEL_PATH = Path(os.environ.get("MODEL_PATH", INSTANCE_DIR / "models" / "best_model.h5"))
+MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
 CONFIDENCE_THRESHOLD = 0.40  # 40%
 
 DEFAULT_CLASS_NAMES = [
@@ -298,9 +303,14 @@ def log_prediction(filename, label, confidence, treatment):
     except sqlite3.Error as e:
         print(f"Prediction log failed: {e}")
 
+def active_model_path():
+    if MODEL_PATH.exists():
+        return MODEL_PATH
+    return BUNDLED_MODEL_PATH
+
 def reload_model():
     global MODEL, MODEL_IMG_SIZE
-    loaded = load_model(MODEL_PATH)
+    loaded = load_model(str(active_model_path()))
     with MODEL_LOCK:
         MODEL = loaded
         MODEL_IMG_SIZE = _infer_model_img_size(MODEL, fallback=(224, 224))
@@ -318,12 +328,107 @@ def mark_retrain_job(job_id, status, message, finished=False):
                 (status, message, job_id)
             )
 
-def run_retrain_job(job_id, command, log_path):
+def ensure_training_dirs():
+    for split in ('train', 'val'):
+        for label in CLASS_NAMES:
+            (TRAINING_DATA_ROOT / 'dataset_split' / split / label).mkdir(parents=True, exist_ok=True)
+
+def count_training_images(directory):
+    if not directory.exists():
+        return 0
+    return sum(
+        1 for path in directory.iterdir()
+        if path.is_file() and allowed_file(path.name)
+    )
+
+def training_data_counts():
+    ensure_training_dirs()
+    rows = []
+    for label in CLASS_NAMES:
+        train_count = count_training_images(TRAINING_DATA_ROOT / 'dataset_split' / 'train' / label)
+        val_count = count_training_images(TRAINING_DATA_ROOT / 'dataset_split' / 'val' / label)
+        rows.append({'label': label, 'train': train_count, 'val': val_count})
+    return rows
+
+def dataset_counts_ready(counts):
+    return bool(counts) and all(row['train'] > 0 and row['val'] > 0 for row in counts)
+
+def local_main_folder_counts():
+    train_root = BASE_DIR / "Main_folder" / "dataset_split" / "train"
+    val_root = BASE_DIR / "Main_folder" / "dataset_split" / "val"
+    if not train_root.exists() or not val_root.exists():
+        return []
+    rows = []
+    for label in CLASS_NAMES:
+        rows.append({
+            'label': label,
+            'train': count_training_images(train_root / label),
+            'val': count_training_images(val_root / label),
+        })
+    return rows
+
+def retrain_source():
+    uploaded_counts = training_data_counts()
+    if dataset_counts_ready(uploaded_counts):
+        return {
+            'train_dir': TRAINING_DATA_ROOT / 'dataset_split' / 'train',
+            'val_dir': TRAINING_DATA_ROOT / 'dataset_split' / 'val',
+            'source': 'admin uploaded training data',
+            'counts': uploaded_counts,
+        }
+
+    local_counts = local_main_folder_counts()
+    if dataset_counts_ready(local_counts):
+        return {
+            'train_dir': BASE_DIR / "Main_folder" / "dataset_split" / "train",
+            'val_dir': BASE_DIR / "Main_folder" / "dataset_split" / "val",
+            'source': 'local Main_folder training data',
+            'counts': local_counts,
+        }
+    return None
+
+def retrain_status():
+    counts = training_data_counts()
+    source = retrain_source()
+    if not TRAINING_SCRIPT_PATH.exists():
+        return "Unavailable", "Training script is missing.", False, counts
+    if source:
+        return "Ready", f"Using {source['source']}.", True, counts
+    return (
+        "Needs Data",
+        "Upload at least one training and validation image for every class.",
+        False,
+        counts,
+    )
+
+def save_training_files(label, split, files):
+    if label not in CLASS_NAMES:
+        return 0, "Unknown crop disease class."
+    if split not in {'train', 'val'}:
+        return 0, "Unknown dataset split."
+
+    target_dir = TRAINING_DATA_ROOT / 'dataset_split' / split / label
+    target_dir.mkdir(parents=True, exist_ok=True)
+    saved = 0
+    for uploaded in files:
+        if not uploaded or not uploaded.filename:
+            continue
+        if not allowed_file(uploaded.filename):
+            continue
+        filename = unique_upload_name(uploaded.filename)
+        uploaded.save(target_dir / filename)
+        saved += 1
+    if saved == 0:
+        return 0, "No valid image files were uploaded."
+    return saved, f"Uploaded {saved} image(s) to {split} for {label}."
+
+def run_retrain_job(job_id, command, log_path, env, pending_model_path):
     try:
         with open(log_path, 'w', encoding='utf-8') as log_file:
             process = subprocess.run(
                 command,
                 cwd=str(BASE_DIR),
+                env=env,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -332,17 +437,22 @@ def run_retrain_job(job_id, command, log_path):
         if process.returncode != 0:
             mark_retrain_job(job_id, "FAILED", f"Training exited with code {process.returncode}.", finished=True)
             return
+        pending_model = Path(pending_model_path)
+        if not pending_model.exists() or pending_model.stat().st_size < 1000000:
+            mark_retrain_job(job_id, "FAILED", "Training did not produce a valid model file.", finished=True)
+            return
+        pending_model.replace(MODEL_PATH)
         reload_model()
         mark_retrain_job(job_id, "SUCCESS", "Training completed and the model was reloaded.", finished=True)
     except Exception as e:
         mark_retrain_job(job_id, "FAILED", str(e), finished=True)
 
 def start_retrain_job():
-    script_path = BASE_DIR / "Main_folder" / "train_model.py"
-    train_dir = BASE_DIR / "Main_folder" / "dataset_split" / "train"
-    val_dir = BASE_DIR / "Main_folder" / "dataset_split" / "val"
-    if not script_path.exists() or not train_dir.exists() or not val_dir.exists():
-        return False, "Training files are not available in this environment."
+    if not TRAINING_SCRIPT_PATH.exists():
+        return False, "Training script is not available in this environment."
+    source = retrain_source()
+    if not source:
+        return False, "Training data is incomplete. Upload train and validation images for every class first."
 
     with get_db() as conn:
         active = conn.execute(
@@ -350,7 +460,18 @@ def start_retrain_job():
         ).fetchone()
         if active:
             return False, f"Retraining job #{active['id']} is already running."
-        command = [sys.executable, str(script_path)]
+        pending_model_path = MODEL_PATH.with_name("best_model.pending.h5")
+        env = os.environ.copy()
+        env.update({
+            "TRAIN_DIR": str(source['train_dir']),
+            "VAL_DIR": str(source['val_dir']),
+            "MODEL_OUTPUT": str(pending_model_path),
+            "CLASS_INDICES_OUTPUT": str(INSTANCE_DIR / "class_indices.json"),
+            "TRAINING_HISTORY_OUTPUT": str(RETRAIN_LOG_DIR / "training_history.pkl"),
+            "RETRAIN_EPOCHS": os.environ.get("RETRAIN_EPOCHS", "10"),
+            "RETRAIN_BATCH_SIZE": os.environ.get("RETRAIN_BATCH_SIZE", "16"),
+        })
+        command = [sys.executable, str(TRAINING_SCRIPT_PATH)]
         log_path = RETRAIN_LOG_DIR / f"retrain_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.log"
         cursor = conn.execute(
             """
@@ -363,7 +484,7 @@ def start_retrain_job():
 
     thread = threading.Thread(
         target=run_retrain_job,
-        args=(job_id, command, str(log_path)),
+        args=(job_id, command, str(log_path), env, str(pending_model_path)),
         daemon=True
     )
     thread.start()
@@ -389,9 +510,10 @@ def _infer_model_img_size(model, fallback=(224, 224)):
     return fallback
 
 try:
-    MODEL = load_model(MODEL_PATH)
+    startup_model_path = active_model_path()
+    MODEL = load_model(str(startup_model_path))
     MODEL_IMG_SIZE = _infer_model_img_size(MODEL, fallback=(224, 224))
-    print(f"Loaded model: {MODEL_PATH}")
+    print(f"Loaded model: {startup_model_path}")
     print(f"Inferred model input size: {MODEL_IMG_SIZE}")
 except Exception as e:
     MODEL = None
@@ -591,18 +713,46 @@ def admin_dashboard():
             LIMIT 5
             """
         ).fetchall()
-    retrain_available = (
-        (BASE_DIR / "Main_folder" / "train_model.py").exists()
-        and (BASE_DIR / "Main_folder" / "dataset_split" / "train").exists()
-        and (BASE_DIR / "Main_folder" / "dataset_split" / "val").exists()
-    )
+    retrain_status_label, retrain_status_message, retrain_available, training_counts = retrain_status()
+    total_train = sum(row['train'] for row in training_counts)
+    total_val = sum(row['val'] for row in training_counts)
     return render_template(
         'admin_dashboard.html',
         treatment_count=treatment_count,
         prediction_count=prediction_count,
         recent_logs=recent_logs,
         retrain_jobs=retrain_jobs,
-        retrain_available=retrain_available
+        retrain_available=retrain_available,
+        retrain_status_label=retrain_status_label,
+        retrain_status_message=retrain_status_message,
+        training_counts=training_counts,
+        total_train=total_train,
+        total_val=total_val
+    )
+
+@app.route('/admin/training-data', methods=['GET', 'POST'])
+@admin_required
+def admin_training_data():
+    if request.method == 'POST':
+        label = request.form.get('label', '')
+        split = request.form.get('split', '')
+        files = request.files.getlist('files')
+        _saved, message = save_training_files(label, split, files)
+        flash(message)
+        return redirect(url_for('admin_training_data'))
+
+    retrain_status_label, retrain_status_message, retrain_available, counts = retrain_status()
+    total_train = sum(row['train'] for row in counts)
+    total_val = sum(row['val'] for row in counts)
+    return render_template(
+        'admin_training_data.html',
+        class_names=CLASS_NAMES,
+        counts=counts,
+        retrain_status_label=retrain_status_label,
+        retrain_status_message=retrain_status_message,
+        retrain_available=retrain_available,
+        total_train=total_train,
+        total_val=total_val
     )
 
 @app.route('/admin/treatments', methods=['GET', 'POST'])
