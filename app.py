@@ -131,6 +131,9 @@ def tasks():
 BUNDLED_MODEL_PATH = Path(os.environ.get("BUNDLED_MODEL_PATH", BASE_DIR / "best_model.h5"))
 MODEL_PATH = Path(os.environ.get("MODEL_PATH", INSTANCE_DIR / "models" / "best_model.h5"))
 MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+RUNTIME_CLASS_INDICES_PATH = Path(os.environ.get("RUNTIME_CLASS_INDICES_PATH", INSTANCE_DIR / "class_indices.json"))
+BUNDLED_CLASS_INDICES_PATH = Path(os.environ.get("BUNDLED_CLASS_INDICES_PATH", BASE_DIR / "class_indices.json"))
+REQUIRE_NON_CROP_CLASS = os.environ.get("REQUIRE_NON_CROP_CLASS", "1").lower() in {"1", "true", "yes", "on"}
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.80"))
 PREDICTION_MARGIN_THRESHOLD = float(os.environ.get("PREDICTION_MARGIN_THRESHOLD", "0.20"))
 MIN_PLANT_RATIO = float(os.environ.get("MIN_PLANT_RATIO", "0.12"))
@@ -164,9 +167,13 @@ DEFAULT_CLASS_NAMES = [
 def load_class_names():
     candidates = [
         os.environ.get("CLASS_INDICES_PATH"),
-        BASE_DIR / "class_indices.json",
+        RUNTIME_CLASS_INDICES_PATH,
+        BUNDLED_CLASS_INDICES_PATH,
         BASE_DIR / "Main_folder" / "class_indices.json",
     ]
+    return load_class_names_from(candidates)
+
+def load_class_names_from(candidates):
     for candidate in candidates:
         if not candidate:
             continue
@@ -314,16 +321,57 @@ def log_prediction(filename, label, confidence, treatment):
         print(f"Prediction log failed: {e}")
 
 def active_model_path():
-    if MODEL_PATH.exists():
+    if _runtime_model_is_selectable():
         return MODEL_PATH
     return BUNDLED_MODEL_PATH
 
 def reload_model():
-    global MODEL, MODEL_IMG_SIZE
-    loaded = load_model(str(active_model_path()))
+    global MODEL, MODEL_IMG_SIZE, CLASS_NAMES
+    model_path = active_model_path()
+    loaded = load_model(str(model_path))
+    class_names = _class_names_for_path(model_path)
+    output_count = _model_output_count(loaded)
+    if output_count is not None and output_count != len(class_names):
+        if model_path == MODEL_PATH and BUNDLED_MODEL_PATH.exists():
+            print(
+                f"Ignoring runtime model because output count {output_count} "
+                f"does not match {len(class_names)} class names."
+            )
+            model_path = BUNDLED_MODEL_PATH
+            loaded = load_model(str(model_path))
+            class_names = _class_names_for_path(model_path)
+            output_count = _model_output_count(loaded)
+        if output_count is not None and output_count != len(class_names):
+            raise RuntimeError(
+                f"Model output count {output_count} does not match {len(class_names)} class names."
+            )
     with MODEL_LOCK:
         MODEL = loaded
         MODEL_IMG_SIZE = _infer_model_img_size(MODEL, fallback=(224, 224))
+        CLASS_NAMES = class_names
+
+def _class_names_for_path(path):
+    if Path(path) == MODEL_PATH:
+        return load_class_names_from([os.environ.get("CLASS_INDICES_PATH"), RUNTIME_CLASS_INDICES_PATH])
+    return load_class_names_from([os.environ.get("CLASS_INDICES_PATH"), BUNDLED_CLASS_INDICES_PATH])
+
+def _model_output_count(model):
+    try:
+        return int(model.output_shape[-1])
+    except Exception:
+        return None
+
+def _runtime_model_is_selectable():
+    if not MODEL_PATH.exists():
+        return False
+    if not RUNTIME_CLASS_INDICES_PATH.exists() and not os.environ.get("CLASS_INDICES_PATH"):
+        print(f"Ignoring runtime model because {RUNTIME_CLASS_INDICES_PATH} is missing.")
+        return False
+    runtime_names = _class_names_for_path(MODEL_PATH)
+    if REQUIRE_NON_CROP_CLASS and NON_CROP_CLASS_NAME not in runtime_names:
+        print(f"Ignoring runtime model because {RUNTIME_CLASS_INDICES_PATH} does not include {NON_CROP_CLASS_NAME}.")
+        return False
+    return True
 
 def mark_retrain_job(job_id, status, message, finished=False):
     with get_db() as conn:
@@ -471,14 +519,20 @@ def start_retrain_job():
         if active:
             return False, f"Retraining job #{active['id']} is already running."
         pending_model_path = MODEL_PATH.with_name("best_model.pending.h5")
+        initial_model_path = active_model_path()
+        initial_class_indices_path = (
+            RUNTIME_CLASS_INDICES_PATH if initial_model_path == MODEL_PATH else BUNDLED_CLASS_INDICES_PATH
+        )
         env = os.environ.copy()
         env.update({
             "TRAIN_DIR": str(source['train_dir']),
             "VAL_DIR": str(source['val_dir']),
             "MODEL_OUTPUT": str(pending_model_path),
-            "INITIAL_MODEL_PATH": str(active_model_path()),
+            "INITIAL_MODEL_PATH": str(initial_model_path),
+            "INITIAL_CLASS_INDICES_PATH": str(initial_class_indices_path),
             "CLASS_INDICES_OUTPUT": str(INSTANCE_DIR / "class_indices.json"),
             "TRAINING_HISTORY_OUTPUT": str(RETRAIN_LOG_DIR / "training_history.pkl"),
+            "RETRAIN_REPLACE_CLASSIFIER_HEAD": os.environ.get("RETRAIN_REPLACE_CLASSIFIER_HEAD", "1"),
             "RETRAIN_EPOCHS": os.environ.get("RETRAIN_EPOCHS", "10"),
             "RETRAIN_BATCH_SIZE": os.environ.get("RETRAIN_BATCH_SIZE", "16"),
         })
@@ -501,8 +555,6 @@ def start_retrain_job():
     thread.start()
     return True, f"Retraining job #{job_id} started."
 
-init_db()
-
 def _infer_model_img_size(model, fallback=(224, 224)):
     """
     Try to read (H, W) from the loaded model.
@@ -523,6 +575,22 @@ def _infer_model_img_size(model, fallback=(224, 224)):
 try:
     startup_model_path = active_model_path()
     MODEL = load_model(str(startup_model_path))
+    CLASS_NAMES = _class_names_for_path(startup_model_path)
+    output_count = _model_output_count(MODEL)
+    if output_count is not None and output_count != len(CLASS_NAMES):
+        if startup_model_path == MODEL_PATH and BUNDLED_MODEL_PATH.exists():
+            print(
+                f"Ignoring runtime model because output count {output_count} "
+                f"does not match {len(CLASS_NAMES)} class names."
+            )
+            startup_model_path = BUNDLED_MODEL_PATH
+            MODEL = load_model(str(startup_model_path))
+            CLASS_NAMES = _class_names_for_path(startup_model_path)
+            output_count = _model_output_count(MODEL)
+        if output_count is not None and output_count != len(CLASS_NAMES):
+            raise RuntimeError(
+                f"Model output count {output_count} does not match {len(CLASS_NAMES)} class names."
+            )
     MODEL_IMG_SIZE = _infer_model_img_size(MODEL, fallback=(224, 224))
     print(f"Loaded model: {startup_model_path}")
     print(f"Inferred model input size: {MODEL_IMG_SIZE}")
@@ -530,6 +598,8 @@ except Exception as e:
     MODEL = None
     MODEL_IMG_SIZE = (224, 224)
     print(f"Error loading model: {e}")
+
+init_db()
 
 def _safe_softmax(x):
     # If last layer already softmax, values will sum ~1 in [0,1]; otherwise apply softmax.
