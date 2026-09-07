@@ -131,7 +131,12 @@ def tasks():
 BUNDLED_MODEL_PATH = Path(os.environ.get("BUNDLED_MODEL_PATH", BASE_DIR / "best_model.h5"))
 MODEL_PATH = Path(os.environ.get("MODEL_PATH", INSTANCE_DIR / "models" / "best_model.h5"))
 MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-CONFIDENCE_THRESHOLD = 0.40  # 40%
+CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.80"))
+PREDICTION_MARGIN_THRESHOLD = float(os.environ.get("PREDICTION_MARGIN_THRESHOLD", "0.20"))
+MIN_PLANT_RATIO = float(os.environ.get("MIN_PLANT_RATIO", "0.12"))
+MIN_PLANT_CONTOUR_RATIO = float(os.environ.get("MIN_PLANT_CONTOUR_RATIO", "0.025"))
+INVALID_IMAGE_LABEL = "Not a supported crop leaf"
+UNCERTAIN_IMAGE_LABEL = "Uncertain image"
 
 DEFAULT_CLASS_NAMES = [
     "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot",
@@ -529,7 +534,7 @@ def _safe_softmax(x):
         return tf.nn.softmax(x).numpy()
     return x
 
-def is_leaf_image(image_path, min_plant_ratio=0.08):
+def is_leaf_image(image_path, min_plant_ratio=MIN_PLANT_RATIO):
     """
     Check if an image likely contains a plant/leaf by analyzing color distribution.
     Uses HSV color space to detect green, yellow-green, and brown (diseased leaf) hues.
@@ -546,32 +551,43 @@ def is_leaf_image(image_path, min_plant_ratio=0.08):
             scale = 512 / max(h, w)
             img = cv2.resize(img, (int(w * scale), int(h * scale)))
 
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        if float(np.std(gray)) < 8.0:
+            return False, "The image is too plain or unclear. Please upload a clear crop leaf photo."
+
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         total_pixels = hsv.shape[0] * hsv.shape[1]
 
         # Define plant-like color ranges in HSV
         # Green hues (healthy leaves): H=25-90
-        green_mask = cv2.inRange(hsv, (25, 30, 30), (90, 255, 255))
+        green_mask = cv2.inRange(hsv, (25, 35, 35), (90, 255, 255))
         # Yellow-brown hues (diseased/dying leaves): H=10-25
-        yellow_brown_mask = cv2.inRange(hsv, (10, 30, 30), (25, 255, 255))
+        yellow_brown_mask = cv2.inRange(hsv, (10, 45, 35), (25, 255, 240))
         # Dark brown/necrotic (severely diseased): H=0-10 with low-mid saturation
-        brown_mask = cv2.inRange(hsv, (0, 20, 20), (10, 200, 180))
+        brown_mask = cv2.inRange(hsv, (0, 35, 25), (10, 220, 190))
 
         # Combine all plant-related colors
         plant_mask = green_mask | yellow_brown_mask | brown_mask
+        kernel = np.ones((5, 5), np.uint8)
+        plant_mask = cv2.morphologyEx(plant_mask, cv2.MORPH_OPEN, kernel)
+        plant_mask = cv2.morphologyEx(plant_mask, cv2.MORPH_CLOSE, kernel)
         plant_pixels = cv2.countNonZero(plant_mask)
         plant_ratio = plant_pixels / total_pixels
 
-        if plant_ratio >= min_plant_ratio:
+        contours, _hierarchy = cv2.findContours(plant_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        largest_contour_ratio = 0.0
+        if contours:
+            largest_contour_ratio = max(cv2.contourArea(contour) for contour in contours) / total_pixels
+
+        if plant_ratio >= min_plant_ratio and largest_contour_ratio >= MIN_PLANT_CONTOUR_RATIO:
             return True, f"Plant content detected ({plant_ratio:.0%})."
 
         return False, (
-            "This doesn't appear to be a leaf image. "
+            "This image does not appear to contain a clear crop leaf. "
             "Please upload a clear photo of a crop leaf (corn, grape, or tomato)."
         )
     except Exception as e:
-        # If validation fails, allow the image through (fail-open)
-        return True, f"Validation skipped: {e}"
+        return False, f"Could not validate the image: {e}"
 
 def processing(fname):
     global MODEL
@@ -585,7 +601,7 @@ def processing(fname):
     # Step 1: Check if the image looks like a leaf
     is_leaf, reason = is_leaf_image(image_path)
     if not is_leaf:
-        return reason, 0.0, None
+        return INVALID_IMAGE_LABEL, 0.0, reason
 
     # Step 2: Run the model
     try:
@@ -600,11 +616,18 @@ def processing(fname):
         idx = int(np.argmax(probs))
         label = CLASS_NAMES[idx] if idx < len(CLASS_NAMES) else f"Class {idx}"
         confidence = float(probs[idx]) * 100.0
+        sorted_probs = np.sort(probs)
+        second_best = float(sorted_probs[-2]) if len(sorted_probs) > 1 else 0.0
+        prediction_margin = float(probs[idx]) - second_best
     except Exception as e:
         return f"Could not process image: {e}", 0.0, None
 
-    if confidence < (CONFIDENCE_THRESHOLD * 100.0):
-        return "Uncertain - Image may not be a crop leaf", confidence, None
+    if confidence < (CONFIDENCE_THRESHOLD * 100.0) or prediction_margin < PREDICTION_MARGIN_THRESHOLD:
+        return (
+            UNCERTAIN_IMAGE_LABEL,
+            round(confidence, 2),
+            "The image may not be a supported crop leaf, or the disease features are not clear enough."
+        )
 
     treatment = treatment_for(label)
     return label, round(confidence, 2), treatment

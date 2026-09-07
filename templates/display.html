@@ -226,6 +226,7 @@
       id="card-root"
       data-label="{{ label|default('unknown') }}"
       data-confidence="{{ confidence|default(0) }}"
+      data-message="{{ treatment|default('', true) }}"
     >
       <!--  Image side  -->
       <div class="image-side">
@@ -271,6 +272,18 @@
     <script>
       /* ---------- Disease encyclopedia ---------- */
       const guide = {
+        "Not a supported crop leaf": {
+          result: "The uploaded image was rejected before disease prediction.",
+          action:
+            "Upload a close, clear photo of a corn, grape, or tomato leaf. Avoid people, buildings, animals, tools, food, screenshots, and distant farm scenes.",
+        },
+
+        "Uncertain image": {
+          result: "The model could not make a reliable crop disease prediction.",
+          action:
+            "Retake the photo with one leaf filling most of the frame, good lighting, and minimal background.",
+        },
+
         "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot": {
           occurrence:
             "Fungus *Cercospora zeae-maydis* loves warm (25-30 °C) humid weather.",
@@ -401,6 +414,7 @@
         const root = document.getElementById("card-root");
         const label = root.dataset.label;
         const conf = parseFloat(root.dataset.confidence || "0");
+        const message = root.dataset.message || "";
         const bar = document.getElementById("bar");
         const details = document.getElementById("details");
 
@@ -411,6 +425,9 @@
         // Render encyclopedia
         if (guide[label]) {
           let html = "";
+          if (message) {
+            html += `<p>${message}</p>`;
+          }
           Object.entries(guide[label]).forEach(([key, val]) => {
             html += `<h4>${key.charAt(0).toUpperCase() + key.slice(1)}</h4>`;
             if (typeof val === "object") {
