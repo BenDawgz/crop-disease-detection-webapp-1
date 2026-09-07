@@ -96,6 +96,16 @@ block body %}
     background: #fff;
   }
   .dropbox.has-file .dropbox-content { display: none; }
+  .dropbox.camera-active {
+    border-style: solid;
+    border-color: var(--accent);
+    background: #111;
+    padding: 0;
+  }
+  .dropbox.camera-active .dropbox-content,
+  .dropbox.camera-active img#imgPreview {
+    display: none;
+  }
 
   .dropbox img#imgPreview {
     width: 100%;
@@ -246,6 +256,38 @@ block body %}
     color: var(--ink);
     background: #f7f7f4;
   }
+  .capture-actions {
+    display: none;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .capture-actions.active {
+    display: grid;
+  }
+  .camera-view {
+    display: none;
+    width: 100%;
+    height: 100%;
+    background: #111;
+  }
+  .camera-view.active {
+    display: block;
+  }
+  .camera-view video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .camera-help {
+    display: none;
+    font-size: 0.8rem;
+    color: var(--ink-muted);
+    line-height: 1.5;
+  }
+  .camera-help.active {
+    display: block;
+  }
 
   /* divider line */
   .sep {
@@ -336,6 +378,9 @@ block body %}
           <p class="dropbox-formats">JPG, PNG or GIF — up to 16 MB</p>
         </div>
         <img id="imgPreview" alt="Selected image preview" />
+        <div class="camera-view" id="cameraView">
+          <video id="cameraStream" autoplay playsinline muted></video>
+        </div>
       </div>
     </div>
 
@@ -371,6 +416,21 @@ block body %}
         </svg>
         Choose from files
       </button>
+      <button class="btn-browse" id="cameraBtn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+          <circle cx="12" cy="13" r="3.5" />
+        </svg>
+        Take a photo
+      </button>
+      <div class="capture-actions" id="captureActions">
+        <button class="btn-browse" id="captureBtn">Capture</button>
+        <button class="btn-browse" id="cancelCameraBtn">Cancel</button>
+      </div>
+      <p class="camera-help" id="cameraHelp">
+        Allow camera access, then point your camera at one clear crop leaf.
+      </p>
 
       <div class="sep"></div>
 
@@ -416,8 +476,19 @@ block body %}
   const analyzeBtn = document.getElementById('analyzeBtn');
   const browseBtn  = document.getElementById('browseBtn');
   const browseTrig = document.getElementById('browseTrigger');
+  const cameraBtn  = document.getElementById('cameraBtn');
+  const captureBtn = document.getElementById('captureBtn');
+  const cancelCameraBtn = document.getElementById('cancelCameraBtn');
+  const cameraView = document.getElementById('cameraView');
+  const cameraStream = document.getElementById('cameraStream');
+  const captureActions = document.getElementById('captureActions');
+  const cameraHelp = document.getElementById('cameraHelp');
+  let activeStream = null;
 
-  function openPicker() { fileInput.click(); }
+  function openPicker() {
+    stopCamera();
+    fileInput.click();
+  }
 
   function showFile(file) {
     if (!file) return;
@@ -429,15 +500,83 @@ block body %}
     reader.onload = function (e) {
       preview.src = e.target.result;
       preview.style.display = 'block';
+      dropbox.classList.remove('camera-active');
       dropbox.classList.add('has-file');
     };
     reader.readAsDataURL(file);
   }
 
+  function stopCamera() {
+    if (activeStream) {
+      activeStream.getTracks().forEach(function (track) { track.stop(); });
+      activeStream = null;
+    }
+    cameraStream.srcObject = null;
+    cameraView.classList.remove('active');
+    captureActions.classList.remove('active');
+    cameraHelp.classList.remove('active');
+    dropbox.classList.remove('camera-active');
+  }
+
+  async function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      fileLabel.textContent = 'Camera is not supported in this browser';
+      fileLabel.classList.remove('active');
+      return;
+    }
+
+    try {
+      stopCamera();
+      activeStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      });
+      cameraStream.srcObject = activeStream;
+      cameraView.classList.add('active');
+      captureActions.classList.add('active');
+      cameraHelp.classList.add('active');
+      dropbox.classList.remove('has-file');
+      dropbox.classList.add('camera-active');
+      preview.removeAttribute('src');
+      preview.style.display = 'none';
+      fileLabel.textContent = 'Camera ready';
+      fileLabel.classList.add('active');
+      analyzeBtn.disabled = true;
+    } catch (err) {
+      stopCamera();
+      fileLabel.textContent = 'Camera access was blocked or unavailable';
+      fileLabel.classList.remove('active');
+    }
+  }
+
+  function capturePhoto() {
+    if (!activeStream || !cameraStream.videoWidth || !cameraStream.videoHeight) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cameraStream.videoWidth;
+    canvas.height = cameraStream.videoHeight;
+    canvas.getContext('2d').drawImage(cameraStream, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob(function (blob) {
+      if (!blob) return;
+      const file = new File([blob], 'camera-capture.jpg', { type: 'image/jpeg' });
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      fileInput.files = transfer.files;
+      stopCamera();
+      showFile(file);
+    }, 'image/jpeg', 0.9);
+  }
+
   // Click handlers
-  dropbox.addEventListener('click', openPicker);
+  dropbox.addEventListener('click', function () {
+    if (!dropbox.classList.contains('camera-active')) openPicker();
+  });
   browseBtn.addEventListener('click', openPicker);
   browseTrig.addEventListener('click', function (e) { e.stopPropagation(); openPicker(); });
+  cameraBtn.addEventListener('click', function () { startCamera(); });
+  captureBtn.addEventListener('click', capturePhoto);
+  cancelCameraBtn.addEventListener('click', stopCamera);
 
   fileInput.addEventListener('change', function () {
     showFile(this.files && this.files[0]);
@@ -451,6 +590,7 @@ block body %}
     dropbox.addEventListener(evt, function (e) { e.preventDefault(); dropbox.classList.remove('hovering'); });
   });
   dropbox.addEventListener('drop', function (e) {
+    stopCamera();
     var dt = e.dataTransfer;
     if (!dt || !dt.files || !dt.files.length) return;
     var transfer = new DataTransfer();
@@ -468,6 +608,8 @@ block body %}
       setTimeout(function () { el.remove(); }, 450);
     });
   }, 5000);
+
+  window.addEventListener('pagehide', stopCamera);
 })();
 </script>
 
