@@ -42,7 +42,8 @@ def main():
                             'result': 'Leaf recognized; condition uncertain'})
         assert client.get('/').status_code == 200
         assert client.get('/input').status_code == 200
-        assert client.get('/admin').status_code == 302
+        assert client.get('/admin').status_code == 404
+        assert client.get('/history').status_code == 200
     (OUT / 'upload_verification.json').write_text(json.dumps(results, indent=2), encoding='utf-8')
     print(json.dumps(results, indent=2))
 
