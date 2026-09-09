@@ -1,9 +1,10 @@
-from flask import Flask, render_template, request, Response, flash, redirect, session, url_for
+from flask import Flask, render_template, request, Response, flash, redirect, session, url_for, send_file, abort
 import cv2
 import json
 import os
 import sqlite3
 import threading
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -230,6 +231,9 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def crop_from_label(label):
+    return label.split('___', 1)[0].replace('_', ' ').strip() if '___' in label else None
+
 def init_db():
     with get_db() as conn:
         conn.execute("""
@@ -244,11 +248,18 @@ def init_db():
                 treatment TEXT
             )
         """)
+        columns = {row['name'] for row in conn.execute("PRAGMA table_info(search_history)")}
+        if 'crop' not in columns:
+            conn.execute("ALTER TABLE search_history ADD COLUMN crop TEXT")
+        for row in conn.execute("SELECT id, label FROM search_history WHERE crop IS NULL"):
+            crop = crop_from_label(row['label'])
+            if crop:
+                conn.execute("UPDATE search_history SET crop = ? WHERE id = ?", (crop, row['id']))
 
 def treatment_for(label):
     return TREATMENT_DICT.get(label, "No treatment info available")
 
-def log_prediction(filename, label, confidence, treatment):
+def log_prediction(filename, label, confidence, treatment, crop=None):
     pending = session.pop('pending_prediction_log', None)
     if not pending or pending.get('filename') != filename:
         return
@@ -258,9 +269,9 @@ def log_prediction(filename, label, confidence, treatment):
                 """
                 INSERT INTO search_history (
                     created_at, filename, original_filename, source, label,
-                    confidence, treatment
+                    confidence, treatment, crop
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     utc_now(),
@@ -270,6 +281,7 @@ def log_prediction(filename, label, confidence, treatment):
                     label,
                     float(confidence or 0.0),
                     treatment,
+                    crop or crop_from_label(label),
                 )
             )
             conn.execute(
@@ -483,7 +495,7 @@ def render_result(fname):
             titles = {'healthy': 'No obvious symptoms', 'uncertain': 'More information needed',
                       'non_leaf': 'No leaf identified', 'unsupported_crop': 'Unsupported crop'}
             label = ('Possible ' + assessment['condition']) if assessment['status'] == 'possible_condition' else titles[assessment['status']]
-            log_prediction(fname, label, 0, json.dumps(assessment))
+            log_prediction(fname, label, 0, json.dumps(assessment), assessment.get('crop'))
             return render_template('display.html', variable_name=fname, label=label,
                                    confidence=None, treatment='', assessment=assessment)
         except AnalysisError as error:
@@ -549,21 +561,117 @@ def display_image():
 @app.route('/history')
 def search_history():
     try:
-        limit = min(max(int(request.args.get('limit', 100)), 1), 500)
+        page = max(int(request.args.get('page', 1)), 1)
     except ValueError:
-        limit = 100
+        page = 1
+    per_page = 10
+    crop = request.args.get('crop', '').strip()
+    result = request.args.get('result', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
+    sort = request.args.get('sort', 'newest')
+    sort_sql = {
+        'newest': 'id DESC',
+        'oldest': 'id ASC',
+        'result': 'label COLLATE NOCASE ASC, id DESC',
+        'crop': 'crop COLLATE NOCASE ASC, id DESC',
+    }.get(sort, 'id DESC')
+    filters = []
+    params = []
+    if crop:
+        filters.append('crop = ?')
+        params.append(crop)
+    if result:
+        filters.append('label LIKE ?')
+        params.append(f'%{result}%')
+    if date_from:
+        filters.append('substr(created_at, 1, 10) >= ?')
+        params.append(date_from)
+    if date_to:
+        filters.append('substr(created_at, 1, 10) <= ?')
+        params.append(date_to)
+    where = f"WHERE {' AND '.join(filters)}" if filters else ''
     with get_db() as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM search_history {where}", params).fetchone()[0]
+        pages = max((total + per_page - 1) // per_page, 1)
+        page = min(page, pages)
         searches = conn.execute(
-            """
-            SELECT id, created_at, filename, original_filename, source, label,
-                   confidence, treatment
-            FROM search_history
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,)
+            f"""SELECT id, created_at, filename, original_filename, source, label,
+                       confidence, treatment, crop
+                FROM search_history {where}
+                ORDER BY {sort_sql} LIMIT ? OFFSET ?""",
+            params + [per_page, (page - 1) * per_page]
         ).fetchall()
-    return render_template('history.html', searches=searches, limit=limit)
+        crops = [row[0] for row in conn.execute(
+            "SELECT DISTINCT crop FROM search_history WHERE crop IS NOT NULL ORDER BY crop COLLATE NOCASE"
+        ).fetchall()]
+    return render_template('history.html', searches=searches, crops=crops,
+                           page=page, pages=pages, total=total,
+                           crop=crop, result=result, date_from=date_from,
+                           date_to=date_to, sort=sort)
+
+def history_record(record_id):
+    with get_db() as conn:
+        return conn.execute(
+            """SELECT id, created_at, filename, original_filename, source, label,
+                      confidence, treatment, crop
+               FROM search_history WHERE id = ?""", (record_id,)
+        ).fetchone()
+
+@app.route('/history/<int:record_id>')
+def history_detail(record_id):
+    search = history_record(record_id)
+    if search is None:
+        abort(404)
+    return render_template('history_detail.html', search=search)
+
+@app.route('/history/<int:record_id>/pdf')
+def history_pdf(record_id):
+    search = history_record(record_id)
+    if search is None:
+        abort(404)
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.utils import ImageReader
+        from reportlab.pdfgen import canvas
+    except ImportError:
+        abort(503, description='PDF export is not available on this installation.')
+    image_path = upload_path(search['filename'])
+    output = BytesIO()
+    pdf = canvas.Canvas(output, pagesize=letter)
+    width, height = letter
+    pdf.setTitle(f"Crop analysis {search['id']}")
+    pdf.setFont('Helvetica-Bold', 20)
+    pdf.drawString(54, height - 60, 'Crop analysis report')
+    pdf.setFont('Helvetica', 11)
+    y = height - 90
+    for title, value in (
+        ('Date', search['created_at']), ('Crop', search['crop'] or 'Not recorded'),
+        ('Result', search['label']), ('Confidence', f"{search['confidence']:.2f}%"),
+    ):
+        pdf.setFont('Helvetica-Bold', 11)
+        pdf.drawString(54, y, f'{title}:')
+        pdf.setFont('Helvetica', 11)
+        pdf.drawString(135, y, str(value or ''))
+        y -= 22
+    if image_path and image_path.exists():
+        try:
+            pdf.drawImage(ImageReader(str(image_path)), 54, y - 220, width=300, height=200, preserveAspectRatio=True, anchor='c')
+            y -= 245
+        except (OSError, ValueError):
+            pass
+    pdf.setFont('Helvetica-Bold', 11)
+    pdf.drawString(54, y, 'Treatment / notes')
+    text = pdf.beginText(54, y - 18)
+    text.setFont('Helvetica', 10)
+    for line in str(search['treatment'] or 'No notes recorded.').splitlines():
+        text.textLine(line[:110])
+    pdf.drawText(text)
+    pdf.showPage()
+    pdf.save()
+    output.seek(0)
+    return send_file(output, mimetype='application/pdf', as_attachment=True,
+                     download_name=f'crop-analysis-{record_id}.pdf')
 
 if __name__ == "__main__":
     debug = os.environ.get('FLASK_DEBUG', '').lower() in {'1', 'true', 'yes', 'on'}

@@ -15,6 +15,7 @@ Pillow>=9.0.0
 scipy>=1.10.0
 
 # Utilities
+reportlab>=4.0.0
 requests>=2.27.1
 urllib3>=1.26.8
 certifi>=2021.10.8

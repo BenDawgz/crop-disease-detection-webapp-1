@@ -1,40 +1,69 @@
 {% extends 'base.html' %}
 {% block title %}Recent Searches{% endblock title %}
 {% block body %}
-<section style="font-family: Inter, system-ui, sans-serif;">
+<style>
+  .history-page { font-family: Inter, system-ui, sans-serif; }
+  .history-filters { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 18px 0; }
+  .history-filters input, .history-filters select, .history-filters button { min-height: 42px; padding: 8px 10px; border: 1px solid #d9e2dc; border-radius: 8px; background: #fff; }
+  .history-filters button { background: #1f9756; color: #fff; border: 0; font-weight: 700; }
+  .history-table { width: 100%; }
+  .history-table td, .history-table th { vertical-align: middle; }
+  .history-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .history-actions a { white-space: nowrap; }
+  .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; }
+  @media (max-width: 720px) {
+    .history-filters { grid-template-columns: 1fr 1fr; }
+    .history-filters button { grid-column: span 2; }
+    .history-table { min-width: 680px; }
+    .history-page h1 { font-size: 1.7rem; }
+  }
+</style>
+<section class="history-page">
   <h1>Recent searches</h1>
-  <p>Results from the latest crop image analyses are stored in the local SQLite database.</p>
+  <p>Results form the latest crop image analyses</p>
+  <form class="history-filters" method="get">
+    <select name="crop" aria-label="Filter by crop">
+      <option value="">All crops</option>
+      {% for item in crops %}<option value="{{ item }}" {% if crop == item %}selected{% endif %}>{{ item }}</option>{% endfor %}
+    </select>
+    <input name="result" value="{{ result }}" placeholder="Filter by result" aria-label="Filter by result">
+    <input type="date" name="date_from" value="{{ date_from }}" aria-label="From date">
+    <input type="date" name="date_to" value="{{ date_to }}" aria-label="To date">
+    <select name="sort" aria-label="Sort results">
+      <option value="newest" {% if sort == 'newest' %}selected{% endif %}>Newest first</option>
+      <option value="oldest" {% if sort == 'oldest' %}selected{% endif %}>Oldest first</option>
+      <option value="result" {% if sort == 'result' %}selected{% endif %}>Result A–Z</option>
+      <option value="crop" {% if sort == 'crop' %}selected{% endif %}>Crop A–Z</option>
+    </select>
+    <button type="submit">Apply filters</button>
+  </form>
   {% if searches %}
   <div style="overflow-x: auto;">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Image</th>
-          <th>Result</th>
-          <th>Confidence</th>
-          <th>Details</th>
-        </tr>
-      </thead>
+    <table class="table history-table">
+      <thead><tr><th>Date</th><th>Image</th><th>Result</th><th>Actions</th></tr></thead>
       <tbody>
         {% for search in searches %}
         <tr>
           <td>{{ search.created_at }}</td>
-          <td>
-            <a href="{{ url_for('display_image', filename=search.filename) }}">
-              {{ search.original_filename or search.filename }}
-            </a>
-          </td>
+          <td><a href="{{ url_for('display_image', filename=search.filename) }}">{{ search.original_filename or search.filename }}</a></td>
           <td>{{ search.label }}</td>
-          <td>{% if search.confidence %}{{ search.confidence|round(2) }}%{% else %}AI assessment{% endif %}</td>
-          <td>{{ search.treatment }}</td>
+          <td class="history-actions">
+            <a class="btn btn-sm btn-outline-success" href="{{ url_for('history_detail', record_id=search.id) }}">View details</a>
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('history_pdf', record_id=search.id) }}">PDF</a>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  <div class="pagination">
+    {% set query = {'crop': crop, 'result': result, 'date_from': date_from, 'date_to': date_to, 'sort': sort} %}
+    {% if page > 1 %}<a href="{{ url_for('search_history', page=page - 1, **query) }}">← Previous</a>{% else %}<span></span>{% endif %}
+    <span>Page {{ page }} of {{ pages }} · {{ total }} result{{ '' if total == 1 else 's' }}</span>
+    {% if page < pages %}<a href="{{ url_for('search_history', page=page + 1, **query) }}">Next →</a>{% else %}<span></span>{% endif %}
+  </div>
   {% else %}
-  <p>No searches have been recorded yet.</p>
+  <p>No searches match these filters.</p>
   {% endif %}
 </section>
 {% endblock body %}

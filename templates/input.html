@@ -395,7 +395,7 @@ block body %}
 
       {% if analysis_provider == 'openai' %}<p class="camera-help" style="display:block">Your photo is sent to OpenAI for a provisional assessment of maize, grape or tomato leaves. Avoid including personal details.</p>{% endif %}
       <form method="POST" action="/upload" enctype="multipart/form-data" id="uploadForm">
-        <input id="fileInput" name="file" type="file" accept="image/*" hidden required />
+        <input id="fileInput" name="file" type="file" accept="image/*" capture="environment" hidden required />
         <input id="sourceInput" name="source" type="hidden" value="upload" />
 
         <div style="display: flex; flex-direction: column; gap: 12px;">
