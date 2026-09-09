@@ -73,7 +73,7 @@ the runtime model under `instance/models` and an input size of `(224, 224)`.
 Custom environment variables such as `MODEL_PATH`, `CLASS_INDICES_PATH`, or
 `DISEASE_CONFIDENCE_THRESHOLD` can override this setup.
 
-The downloaded experiment uses a manifest rather than the admin upload folder.
+The downloaded experiment uses a manifest rather than the application upload folder.
 Reproduce it with the preparation, training, calibration, and verification
 scripts documented in `training/PUBLIC_DATA.md`. Data and runtime model files
 under `instance` are intentionally ignored by Git; include them separately

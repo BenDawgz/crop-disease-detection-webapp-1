@@ -37,9 +37,9 @@ can use `pip install -r requirements-windows.txt` in their virtual environment.
 - `store: false` disables Responses application-state storage; this is not a
   promise of zero provider retention. Original uploads and assessment logs
   remain on this PC under the app's existing storage behaviour.
-- Local retraining is disabled while OpenAI is selected. Admin treatment text
-  is not applied to provisional API assessments. Existing admin confidence
-  logs use 0 as an unavailable score for API results, not a measured probability.
+- Local retraining is disabled while OpenAI is selected. Provisional API
+  assessments are stored in recent-search history with 0 as an unavailable
+  score, not a measured probability.
 
 To choose another compatible image/structured-output model, set `OPENAI_MODEL`
 before starting. Access depends on your API account.
