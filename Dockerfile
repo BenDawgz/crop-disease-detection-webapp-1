@@ -21,12 +21,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY . .
 
-# Handle Git LFS: if model file is an LFS pointer, download the real file
+# Handle Git LFS: if the model is a pointer, clone and check out its LFS object.
 RUN if [ -f best_model.h5 ] && head -1 best_model.h5 | grep -q "version https://git-lfs"; then \
     echo "Model is an LFS pointer, fetching real file..." && \
     git lfs install --skip-repo && \
-    git clone --no-checkout --filter=blob:none https://github.com/iwankobb/crop-disease-detection-webapp.git /tmp/repo && \
-    cd /tmp/repo && git lfs pull --include="best_model.h5" && git checkout main -- best_model.h5 && \
+    git clone --depth 1 https://github.com/BenDawgz/crop-disease-detection-webapp-1.git /tmp/repo && \
+    cd /tmp/repo && git lfs pull --include="best_model.h5" && \
     cp /tmp/repo/best_model.h5 /app/best_model.h5 && \
     rm -rf /tmp/repo && \
     echo "Model downloaded successfully"; \
