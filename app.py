@@ -1,4 +1,3 @@
-import tensorflow as tf
 from flask import Flask, render_template, request, Response, flash, redirect, session, url_for
 import cv2
 import hmac
@@ -13,8 +12,18 @@ from datetime import datetime, timezone
 from functools import wraps
 from uuid import uuid4
 from werkzeug.utils import secure_filename
-from tensorflow.keras.models import load_model
 import numpy as np
+from prediction_policy import classify_scores, has_leaf_evidence
+from leaf_locator import locate_leaf, crop_leaf
+from PIL import Image
+from crop_vision import CropVision, AnalysisError
+
+ANALYSIS_PROVIDER = os.environ.get('ANALYSIS_PROVIDER', 'openai').lower()
+if ANALYSIS_PROVIDER not in {'openai', 'local'}:
+    raise RuntimeError('ANALYSIS_PROVIDER must be openai or local')
+if ANALYSIS_PROVIDER == 'local':
+    import tensorflow as tf
+    from tensorflow.keras.models import load_model
 
 # Globals
 global switch
@@ -25,6 +34,12 @@ app = Flask(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_FOLDER = BASE_DIR / 'static' / 'shots'
 INSTANCE_DIR = BASE_DIR / 'instance'
+VISION = CropVision(INSTANCE_DIR)
+
+@app.context_processor
+def analysis_context():
+    return {'analysis_provider': ANALYSIS_PROVIDER}
+
 DATABASE_PATH = Path(os.environ.get('DATABASE_PATH', INSTANCE_DIR / 'crop_admin.db'))
 RETRAIN_LOG_DIR = INSTANCE_DIR / 'retrain_logs'
 TRAINING_DATA_ROOT = Path(os.environ.get('TRAINING_DATA_ROOT', INSTANCE_DIR / 'training_data'))
@@ -135,12 +150,9 @@ RUNTIME_CLASS_INDICES_PATH = Path(os.environ.get("RUNTIME_CLASS_INDICES_PATH", I
 BUNDLED_CLASS_INDICES_PATH = Path(os.environ.get("BUNDLED_CLASS_INDICES_PATH", BASE_DIR / "class_indices.json"))
 REQUIRE_NON_CROP_CLASS = os.environ.get("REQUIRE_NON_CROP_CLASS", "1").lower() in {"1", "true", "yes", "on"}
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.70"))
+# Selected on public-data validation images; kept separate from non-leaf rejection.
+DISEASE_CONFIDENCE_THRESHOLD = float(os.environ.get("DISEASE_CONFIDENCE_THRESHOLD", "0.95"))
 PREDICTION_MARGIN_THRESHOLD = float(os.environ.get("PREDICTION_MARGIN_THRESHOLD", "0.20"))
-SUPPORTED_FALLBACK_CONFIDENCE = float(os.environ.get("SUPPORTED_FALLBACK_CONFIDENCE", "0.001"))
-MIN_PLANT_RATIO = float(os.environ.get("MIN_PLANT_RATIO", "0.12"))
-MIN_PLANT_CONTOUR_RATIO = float(os.environ.get("MIN_PLANT_CONTOUR_RATIO", "0.025"))
-MIN_GREEN_RATIO = float(os.environ.get("MIN_GREEN_RATIO", "0.03"))
-MAX_SKIN_RATIO = float(os.environ.get("MAX_SKIN_RATIO", "0.18"))
 NON_CROP_CLASS_NAME = "Not_A_Crop"
 INVALID_IMAGE_LABEL = "image not supported"
 UNCERTAIN_IMAGE_LABEL = "Uncertain image"
@@ -214,6 +226,8 @@ TREATMENT_DICT = {
     "Tomato___Spider_mites Two-spotted_spider_mite": "Use miticides or neem oil.",
     "Tomato___Target_Spot": "Apply fungicides and ensure proper plant spacing.",
     "Tomato___Tomato_Yellow_Leaf_Curl_Virus": "Use insecticides to control whiteflies, remove infected plants, and use resistant varieties.",
+    "Tomato___healthy": "No disease-specific treatment was selected. Continue monitoring the plant.",
+    "Tomato___Tomato_mosaic_virus": "Confirm the cause with a local crop specialist before choosing a treatment.",
     NON_CROP_CLASS_NAME: INVALID_IMAGE_LABEL
 }
 
@@ -447,6 +461,8 @@ def retrain_source():
     return None
 
 def retrain_status():
+    if ANALYSIS_PROVIDER == 'openai':
+        return 'OpenAI active', 'Local retraining does not change OpenAI image analysis.', False, []
     counts = training_data_counts()
     source = retrain_source()
     if not TRAINING_SCRIPT_PATH.exists():
@@ -507,6 +523,8 @@ def run_retrain_job(job_id, command, log_path, env, pending_model_path):
         mark_retrain_job(job_id, "FAILED", str(e), finished=True)
 
 def start_retrain_job():
+    if ANALYSIS_PROVIDER == 'openai':
+        return False, 'Local retraining is disabled while OpenAI analysis is active.'
     if not TRAINING_SCRIPT_PATH.exists():
         return False, "Training script is not available in this environment."
     source = retrain_source()
@@ -573,123 +591,48 @@ def _infer_model_img_size(model, fallback=(224, 224)):
         pass
     return fallback
 
-try:
-    startup_model_path = active_model_path()
-    MODEL = load_model(str(startup_model_path))
-    CLASS_NAMES = _class_names_for_path(startup_model_path)
-    output_count = _model_output_count(MODEL)
-    if output_count is not None and output_count != len(CLASS_NAMES):
-        if startup_model_path == MODEL_PATH and BUNDLED_MODEL_PATH.exists():
-            print(
-                f"Ignoring runtime model because output count {output_count} "
-                f"does not match {len(CLASS_NAMES)} class names."
-            )
-            startup_model_path = BUNDLED_MODEL_PATH
-            MODEL = load_model(str(startup_model_path))
-            CLASS_NAMES = _class_names_for_path(startup_model_path)
-            output_count = _model_output_count(MODEL)
+MODEL = None
+MODEL_IMG_SIZE = (224, 224)
+if ANALYSIS_PROVIDER == 'local':
+    try:
+        startup_model_path = active_model_path()
+        MODEL = load_model(str(startup_model_path))
+        CLASS_NAMES = _class_names_for_path(startup_model_path)
+        output_count = _model_output_count(MODEL)
         if output_count is not None and output_count != len(CLASS_NAMES):
-            raise RuntimeError(
-                f"Model output count {output_count} does not match {len(CLASS_NAMES)} class names."
-            )
-    MODEL_IMG_SIZE = _infer_model_img_size(MODEL, fallback=(224, 224))
-    print(f"Loaded model: {startup_model_path}")
-    print(f"Inferred model input size: {MODEL_IMG_SIZE}")
-except Exception as e:
-    MODEL = None
-    MODEL_IMG_SIZE = (224, 224)
-    print(f"Error loading model: {e}")
+            if startup_model_path == MODEL_PATH and BUNDLED_MODEL_PATH.exists():
+                print(
+                    f"Ignoring runtime model because output count {output_count} "
+                    f"does not match {len(CLASS_NAMES)} class names."
+                )
+                startup_model_path = BUNDLED_MODEL_PATH
+                MODEL = load_model(str(startup_model_path))
+                CLASS_NAMES = _class_names_for_path(startup_model_path)
+                output_count = _model_output_count(MODEL)
+            if output_count is not None and output_count != len(CLASS_NAMES):
+                raise RuntimeError(
+                    f"Model output count {output_count} does not match {len(CLASS_NAMES)} class names."
+                )
+        MODEL_IMG_SIZE = _infer_model_img_size(MODEL, fallback=(224, 224))
+        print(f"Loaded model: {startup_model_path}")
+        print(f"Inferred model input size: {MODEL_IMG_SIZE}")
+    except Exception as e:
+        MODEL = None
+        MODEL_IMG_SIZE = (224, 224)
+        print(f"Error loading model: {e}")
+
+# A separately evaluated locator can be enabled explicitly after its pipeline
+# evaluation. Keeping it optional preserves the installed classifier by default.
+LEAF_LOCATOR = None
+LEAF_LOCATOR_THRESHOLD = float(os.environ.get('LEAF_LOCATOR_THRESHOLD', '0.90'))
+if ANALYSIS_PROVIDER == 'local' and os.environ.get('LEAF_LOCATOR_PATH'):
+    try:
+        LEAF_LOCATOR = load_model(os.environ['LEAF_LOCATOR_PATH'], compile=False)
+        print('Loaded optional dominant-leaf locator.')
+    except Exception as error:
+        raise RuntimeError('Configured leaf locator could not be loaded') from error
 
 init_db()
-
-def _safe_softmax(x):
-    # If last layer already softmax, values will sum ~1 in [0,1]; otherwise apply softmax.
-    x = np.asarray(x).astype("float32")
-    s = x.sum()
-    if np.any(x > 1.0001) or s <= 0.0 or s > 1.0001:
-        return tf.nn.softmax(x).numpy()
-    return x
-
-def _best_supported_prediction(probs):
-    supported = [
-        (index, float(prob))
-        for index, prob in enumerate(probs)
-        if index < len(CLASS_NAMES) and CLASS_NAMES[index] != NON_CROP_CLASS_NAME
-    ]
-    if not supported:
-        return None, None, 0.0, 0.0
-    supported.sort(key=lambda item: item[1], reverse=True)
-    index, probability = supported[0]
-    second = supported[1][1] if len(supported) > 1 else 0.0
-    return index, CLASS_NAMES[index], probability * 100.0, probability - second
-
-def is_leaf_image(image_path, min_plant_ratio=MIN_PLANT_RATIO):
-    """
-    Check if an image likely contains a plant/leaf by analyzing color distribution.
-    Uses HSV color space to detect green, yellow-green, and brown (diseased leaf) hues.
-    Returns (is_leaf: bool, reason: str)
-    """
-    try:
-        img = cv2.imread(str(image_path))
-        if img is None:
-            return False, "Could not read the image file."
-
-        # Resize for faster processing
-        h, w = img.shape[:2]
-        if max(h, w) > 512:
-            scale = 512 / max(h, w)
-            img = cv2.resize(img, (int(w * scale), int(h * scale)))
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        if float(np.std(gray)) < 8.0:
-            return False, "The image is too plain or unclear. Please upload a clear crop leaf photo."
-
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        total_pixels = hsv.shape[0] * hsv.shape[1]
-
-        # Define plant-like color ranges in HSV
-        # Green hues (healthy leaves): H=25-90
-        green_mask = cv2.inRange(hsv, (25, 35, 35), (90, 255, 255))
-        # Yellow-brown hues (diseased/dying leaves): H=10-25
-        yellow_brown_mask = cv2.inRange(hsv, (10, 45, 35), (25, 255, 240))
-        # Dark brown/necrotic (severely diseased): H=0-10 with low-mid saturation
-        brown_mask = cv2.inRange(hsv, (0, 35, 25), (10, 220, 190))
-
-        green_ratio = cv2.countNonZero(green_mask) / total_pixels
-        yellow_brown_ratio = cv2.countNonZero(yellow_brown_mask) / total_pixels
-        brown_ratio = cv2.countNonZero(brown_mask) / total_pixels
-
-        ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
-        skin_mask = cv2.inRange(ycrcb, (0, 133, 77), (255, 173, 127))
-        skin_ratio = cv2.countNonZero(skin_mask) / total_pixels
-        if skin_ratio >= MAX_SKIN_RATIO and green_ratio < max(MIN_GREEN_RATIO * 2, 0.08):
-            return False, "This image appears to contain a person or non-crop object. Please capture a clear crop leaf."
-
-        if green_ratio < MIN_GREEN_RATIO and (green_ratio + yellow_brown_ratio + brown_ratio) < min_plant_ratio:
-            return False, "This image does not contain enough leaf area for crop disease detection."
-
-        # Combine all plant-related colors
-        plant_mask = green_mask | yellow_brown_mask | brown_mask
-        kernel = np.ones((5, 5), np.uint8)
-        plant_mask = cv2.morphologyEx(plant_mask, cv2.MORPH_OPEN, kernel)
-        plant_mask = cv2.morphologyEx(plant_mask, cv2.MORPH_CLOSE, kernel)
-        plant_pixels = cv2.countNonZero(plant_mask)
-        plant_ratio = plant_pixels / total_pixels
-
-        contours, _hierarchy = cv2.findContours(plant_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        largest_contour_ratio = 0.0
-        if contours:
-            largest_contour_ratio = max(cv2.contourArea(contour) for contour in contours) / total_pixels
-
-        if plant_ratio >= min_plant_ratio and largest_contour_ratio >= MIN_PLANT_CONTOUR_RATIO:
-            return True, f"Plant content detected ({plant_ratio:.0%})."
-
-        return False, (
-            "This image does not appear to contain a clear crop leaf. "
-            "Please upload a clear photo of a crop leaf (corn, grape, or tomato)."
-        )
-    except Exception as e:
-        return False, f"Could not validate the image: {e}"
 
 def processing(fname):
     global MODEL
@@ -700,48 +643,68 @@ def processing(fname):
     if image_path is None or not image_path.exists():
         return "No image", 0.0, None
 
-    # Step 1: Check if the image looks like a leaf
-    is_leaf, reason = is_leaf_image(image_path)
-    if not is_leaf:
-        return INVALID_IMAGE_LABEL, 0.0, INVALID_IMAGE_LABEL
-
-    # Step 2: Run the model
+    # Let the trained classifier evaluate the image; color is not a leaf detector.
     try:
-        img = tf.keras.preprocessing.image.load_img(str(image_path), target_size=MODEL_IMG_SIZE)
+        if LEAF_LOCATOR is not None:
+            with Image.open(image_path) as original:
+                rgb = original.convert('RGB')
+                with MODEL_LOCK:
+                    box = locate_leaf(LEAF_LOCATOR, rgb, LEAF_LOCATOR_THRESHOLD)
+                if box is None:
+                    return (UNCERTAIN_IMAGE_LABEL, 0.0,
+                            'A leaf could not be located reliably. Please photograph one leaf up close. '
+                            'No disease-specific treatment has been selected.')
+                img = crop_leaf(rgb, box).resize((MODEL_IMG_SIZE[1], MODEL_IMG_SIZE[0]), Image.Resampling.NEAREST)
+        else:
+            img = tf.keras.preprocessing.image.load_img(str(image_path), target_size=MODEL_IMG_SIZE)
         input_arr = tf.keras.preprocessing.image.img_to_array(img)
         input_arr = np.expand_dims(input_arr, axis=0).astype("float32") / 255.0
 
         with MODEL_LOCK:
             preds = MODEL.predict(input_arr)
-        scores = preds[0]
-        probs = _safe_softmax(scores)
-        idx = int(np.argmax(probs))
-        label = CLASS_NAMES[idx] if idx < len(CLASS_NAMES) else f"Class {idx}"
-        confidence = float(probs[idx]) * 100.0
-        sorted_probs = np.sort(probs)
-        second_best = float(sorted_probs[-2]) if len(sorted_probs) > 1 else 0.0
-        prediction_margin = float(probs[idx]) - second_best
+            label, confidence = classify_scores(
+                preds[0], CLASS_NAMES,
+                confidence_threshold=CONFIDENCE_THRESHOLD,
+                margin_threshold=PREDICTION_MARGIN_THRESHOLD,
+                non_crop_class=NON_CROP_CLASS_NAME,
+                disease_confidence_threshold=DISEASE_CONFIDENCE_THRESHOLD,
+            )
+            leaf_evidence = has_leaf_evidence(preds[0], CLASS_NAMES)
     except Exception as e:
         return f"Could not process image: {e}", 0.0, None
 
-    if label == NON_CROP_CLASS_NAME:
-        fallback_idx, fallback_label, fallback_confidence, fallback_margin = _best_supported_prediction(probs)
-        if fallback_label and fallback_confidence >= (SUPPORTED_FALLBACK_CONFIDENCE * 100.0):
-            label = fallback_label
-            confidence = fallback_confidence
-            prediction_margin = fallback_margin
-        else:
+    if label is None:
+        if leaf_evidence:
             return (
-                INVALID_IMAGE_LABEL,
+                UNCERTAIN_IMAGE_LABEL,
                 round(confidence, 2),
-                INVALID_IMAGE_LABEL
+                "A leaf was recognized, but its condition could not be identified reliably. "
+                "The condition may be outside the trained categories. No disease-specific "
+                "treatment has been selected."
             )
-
-    if confidence < (CONFIDENCE_THRESHOLD * 100.0) or prediction_margin < PREDICTION_MARGIN_THRESHOLD:
         return (
             UNCERTAIN_IMAGE_LABEL,
             round(confidence, 2),
-            "The image may not be a supported crop leaf, or the disease features are not clear enough."
+            "The model could not reliably distinguish a supported crop leaf from other images. "
+            "Please retake the photo with one leaf in focus and a simple background."
+        )
+
+    if label == 'Unsupported_Leaf':
+        return (
+            UNCERTAIN_IMAGE_LABEL,
+            round(confidence, 2),
+            "A leaf was recognized, but the model could not identify a supported crop condition. "
+            "No disease-specific treatment has been selected."
+        )
+
+    if label == NON_CROP_CLASS_NAME:
+        return (
+            INVALID_IMAGE_LABEL,
+            round(confidence, 2),
+            "The model could not recognize a supported crop condition in this image. "
+            "This does not establish that the photo contains no leaf: unfamiliar leaf "
+            "conditions can also be rejected. Try a close-up of one leaf; if it is still "
+            "rejected, its condition may require additional training data."
         )
 
     treatment = treatment_for(label)
@@ -752,6 +715,19 @@ def render_result(fname):
     if image_path is None or not image_path.exists():
         flash("No image to display.")
         return redirect('/input')
+    if ANALYSIS_PROVIDER == 'openai':
+        try:
+            assessment = VISION.analyze(image_path)
+            titles = {'healthy': 'No obvious symptoms', 'uncertain': 'More information needed',
+                      'non_leaf': 'No leaf identified', 'unsupported_crop': 'Unsupported crop'}
+            label = ('Possible ' + assessment['condition']) if assessment['status'] == 'possible_condition' else titles[assessment['status']]
+            log_prediction(fname, label, 0, json.dumps(assessment))
+            return render_template('display.html', variable_name=fname, label=label,
+                                   confidence=None, treatment='', assessment=assessment)
+        except AnalysisError as error:
+            return render_template('display.html', variable_name=fname,
+                                   label='Analysis unavailable', confidence=None,
+                                   treatment=str(error), assessment=None)
     label, confidence, treatment = processing(fname)
     log_prediction(fname, label, confidence, treatment)
     return render_template('display.html',

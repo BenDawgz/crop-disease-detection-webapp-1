@@ -255,13 +255,24 @@
               <span id="label-name">{{ label }}</span>
             </div>
             <div class="badge" id="confidence-badge">
-              {{ (confidence|float)|round(2) }}%
+              {% if analysis_provider == 'openai' %}AI assessment{% else %}{{ (confidence|float)|round(2) }}%{% endif %}
             </div>
           </div>
-          <div class="progress"><i id="bar"></i></div>
+          {% if analysis_provider != 'openai' %}<div class="progress"><i id="bar"></i></div>{% endif %}
         </div>
 
-        <div class="details" id="details">Loading details…</div>
+        <div class="details" id="details">
+          {% if analysis_provider == 'openai' %}
+            {% if assessment %}
+              <h4>Crop</h4><p>{{ assessment.crop|capitalize }}</p>
+              <h4>Visible symptoms</h4><ul>{% for item in assessment.symptoms %}<li>{{ item }}</li>{% endfor %}</ul>
+              {% if assessment.possible_causes %}<h4>Possible causes</h4><ul>{% for item in assessment.possible_causes %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+              <h4>Assessment</h4><p>{{ assessment.explanation }}</p>
+              <h4>Next steps</h4><ul>{% for item in assessment.next_steps %}<li>{{ item }}</li>{% endfor %}</ul>
+              <p>A photo assessment is provisional. Confirm the cause before selecting disease-specific treatment.</p>
+            {% else %}<p>{{ treatment }}</p>{% endif %}
+          {% else %}Loading details…{% endif %}
+        </div>
 
         <button class="btn" onclick="window.location.href='/input'">
           ← Scan Another
@@ -270,11 +281,12 @@
     </main>
 
     <script>
+      {% if analysis_provider != 'openai' %}
       /* ---------- Disease encyclopedia ---------- */
       const guide = {
         "image not supported": {
-          result: "image not supported",
-          action: "image not supported",
+           result: "A supported crop condition could not be identified.",
+           action: "A rejected image may still contain a leaf. The model may need examples of this condition.",
         },
 
         "Uncertain image": {
@@ -406,6 +418,14 @@
           management: "Remove infected plants, control whiteflies with insecticides.",
           prevention: "Resistant varieties, reflective mulches, whitefly traps.",
         },
+        Tomato___healthy: {
+          result: "The model identified a healthy tomato leaf.",
+          action: "Continue monitoring the plant for changes.",
+        },
+        Tomato___Tomato_mosaic_virus: {
+          result: "The model identified the tomato mosaic virus category.",
+          action: "Confirm the cause with a local crop specialist before choosing a treatment.",
+        },
       };
 
       /* ---------- Populate ---------- */
@@ -444,6 +464,7 @@
           details.innerHTML = "<p>No further information available.</p>";
         }
       })();
+      {% endif %}
     </script>
   </body>
 </html>

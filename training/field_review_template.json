@@ -1,0 +1,35 @@
+{
+  "instructions": "One record per original photo. Related plants and photo sessions must stay in the same split. Leave unverified labels null. Do not use pending records for disease training or accuracy claims.",
+  "records": [
+    {
+      "path": null,
+      "crop": null,
+      "condition": null,
+      "contains_leaf": null,
+      "leaf_boxes_normalized_xyxy": [],
+      "plant_id": null,
+      "session_id": null,
+      "farm_id": null,
+      "captured_date": null,
+      "disease_stage": null,
+      "lighting": null,
+      "background": null,
+      "camera_distance": null,
+      "source_url": null,
+      "license_or_consent": null,
+      "reviewer": null,
+      "reviewer_qualification": null,
+      "review_status": "pending",
+      "diagnostic_evidence": null,
+      "split": null
+    }
+  ],
+  "collection_gaps": [
+    "Tomato spotted wilt",
+    "Leaf-miner damage on target crops",
+    "Expert-confirmed nutrient deficiencies on target crops",
+    "Healthy field leaves for all three crops",
+    "Locally photographed non-leaf objects, fruit, stems, hands and soil",
+    "A prospective test set from farms/plants/sessions absent from training"
+  ]
+}
